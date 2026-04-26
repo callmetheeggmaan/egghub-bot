@@ -1,0 +1,20 @@
+{
+  "name": "egghub-bot",
+  "version": "1.0.0",
+  "description": "EggHub Discord Bot",
+  "main": "src/bot.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "node src/bot.js",
+    "deploy": "node src/deploy-commands.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "discord.js": "^14.26.3",
+    "dotenv": "^17.4.2",
+    "pg": "^8.20.0"
+  }
+}
