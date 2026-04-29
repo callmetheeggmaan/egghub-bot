@@ -7,6 +7,12 @@ const roleExpiry = require("./utils/roleExpiry");
 const buyItem = require("./utils/buyItem");
 
 const {
+  trackDropActivity,
+  startSmartDrops,
+  handleDropClaim,
+} = require("./utils/randomDrop");
+
+const {
   Client,
   GatewayIntentBits,
   Collection,
@@ -50,6 +56,7 @@ for (const file of commandFiles) {
 client.once(Events.ClientReady, () => {
   console.log(`EggHub Bot is online as ${client.user.tag}`);
   roleExpiry(client);
+  startSmartDrops(client);
 });
 
 // Welcome system
@@ -151,6 +158,12 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
 
 // Interaction handler
 client.on(Events.InteractionCreate, async interaction => {
+  // Random drop claim button
+  if (interaction.isButton()) {
+    const handled = await handleDropClaim(interaction);
+    if (handled) return;
+  }
+
   // Role selector
   if (interaction.isStringSelectMenu()) {
     if (interaction.customId === "role_select") {
@@ -216,12 +229,14 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// Chat earn system
+// Chat earn system + smart drop activity tracking
 const messageCooldowns = new Map();
 
 client.on(Events.MessageCreate, async message => {
   if (message.author.bot) return;
   if (!message.guild) return;
+
+  trackDropActivity(message);
 
   const userId = message.author.id;
   const username = message.author.username;
