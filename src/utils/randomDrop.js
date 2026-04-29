@@ -8,10 +8,10 @@ const pool = require("../db/pool");
 
 let activeDrop = null;
 
-const DROP_INTERVAL = 5 * 60 * 1000; // every 5 minutes
-const FIRST_DROP_DELAY = 10 * 1000; // first drop after 10 seconds on startup
-const DROP_EXPIRE_TIME = 60 * 1000; // unclaimed drop lasts 60 seconds
-const CLAIMED_DELETE_DELAY = 10 * 1000; // claimed drop deletes after 10 seconds
+const DROP_INTERVAL = 5 * 60 * 1000; // drop every 5 minutes
+const DROP_EXPIRE_TIME = 60 * 1000; // unclaimed drop expires after 60 seconds
+const CLAIMED_DELETE_DELAY = 10 * 1000; // claimed winner message deletes after 10 seconds
+const EXPIRED_DELETE_DELAY = 3 * 1000; // expired message deletes after 3 seconds
 
 function getRandomReward() {
   const rewards = [
@@ -53,7 +53,7 @@ async function getDropChannel(client) {
   const dropChannelId = process.env.DROP_CHANNEL_ID;
 
   if (!dropChannelId) {
-    console.log("Egg Drop error: DROP_CHANNEL_ID is missing in Railway variables.");
+    console.log("Egg Drop error: DROP_CHANNEL_ID is missing.");
     return null;
   }
 
@@ -117,28 +117,16 @@ async function spawnDrop(channel) {
 
       setTimeout(() => {
         dropMessage.delete().catch(() => null);
-      }, 3000);
+      }, EXPIRED_DELETE_DELAY);
     } catch (err) {
-      console.log("Failed to clean expired drop message");
+      console.log("Failed to clean expired drop message:", err.message);
     }
   }, DROP_EXPIRE_TIME);
 }
 
 function startSmartDrops(client) {
   console.log("Timed Egg Drops started.");
-  console.log("First Egg Drop will try to spawn in 10 seconds.");
-  console.log("Then Egg Drops will run every 5 minutes.");
-
-  setTimeout(async () => {
-    try {
-      const dropChannel = await getDropChannel(client);
-      if (!dropChannel) return;
-
-      await spawnDrop(dropChannel);
-    } catch (error) {
-      console.error("First timed drop error:", error);
-    }
-  }, FIRST_DROP_DELAY);
+  console.log("Egg Drops will run every 5 minutes.");
 
   setInterval(async () => {
     try {
@@ -183,6 +171,7 @@ async function handleDropClaim(interaction) {
 
   const userId = interaction.user.id;
   const username = interaction.user.username;
+  const messageToDelete = interaction.message;
 
   await pool.query(
     `
@@ -211,14 +200,16 @@ async function handleDropClaim(interaction) {
       `${interaction.user} was the quickest to grab it.\n\n` +
       `🥚 **Reward:** ${reward} Eggs\n` +
       `🏆 **Winner:** ${username}\n\n` +
-      `This message will disappear shortly.`,
+      `This message will delete in 10 seconds.`,
     components: [row],
   });
 
   activeDrop = null;
 
   setTimeout(() => {
-    interaction.message.delete().catch(() => null);
+    messageToDelete.delete().catch((err) => {
+      console.log("Failed to delete claimed drop message:", err.message);
+    });
   }, CLAIMED_DELETE_DELAY);
 
   return true;
