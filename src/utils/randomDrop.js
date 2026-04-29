@@ -8,8 +8,8 @@ const pool = require("../db/pool");
 
 let activeDrop = null;
 
-const DROP_INTERVAL = 5 * 60 * 1000; // every 5 minutes
-const DROP_EXPIRE_TIME = 60 * 1000; // drop lasts 60 seconds
+const DROP_INTERVAL = 5 * 60 * 1000;
+const DROP_EXPIRE_TIME = 60 * 1000;
 
 function getRandomReward() {
   const rewards = [
@@ -26,10 +26,7 @@ function getRandomReward() {
 
   for (const reward of rewards) {
     total += reward.chance;
-
-    if (roll <= total) {
-      return reward.amount;
-    }
+    if (roll <= total) return reward.amount;
   }
 
   return 10;
@@ -39,8 +36,7 @@ function createDropId() {
   return `${Date.now()}_${Math.floor(Math.random() * 999999)}`;
 }
 
-// Kept so bot.js does not break.
-function trackDropActivity(message) {
+function trackDropActivity() {
   return;
 }
 
@@ -61,7 +57,6 @@ async function spawnDrop(channel) {
   const dropMessage = await channel.send({
     content:
       `🥚 **EGG DROP HAS APPEARED!** 🥚\n\n` +
-      `A random Egg Drop has landed in the server.\n` +
       `First person to click the button wins **${reward} Eggs**!\n\n` +
       `⏳ You have **60 seconds** to claim it.`,
     components: [row],
@@ -93,8 +88,7 @@ async function spawnDrop(channel) {
     await dropMessage.edit({
       content:
         `⌛ **EGG DROP EXPIRED**\n\n` +
-        `Nobody claimed the **${reward} Eggs** in time.\n` +
-        `Another drop will appear soon.`,
+        `Nobody claimed the **${reward} Eggs** in time.`,
       components: [expiredRow],
     }).catch(() => null);
   }, DROP_EXPIRE_TIME);
@@ -108,18 +102,22 @@ function startSmartDrops(client) {
       if (activeDrop) return;
 
       const guild = client.guilds.cache.first();
-
       if (!guild) {
         console.log("No guild found for Egg Drop.");
         return;
       }
 
-      const dropChannel =
-        guild.channels.cache.get(process.env.DROP_CHANNEL_ID) ||
-        guild.channels.cache.get(process.env.WELCOME_CHANNEL_ID);
+      const dropChannelId = process.env.DROP_CHANNEL_ID;
+
+      if (!dropChannelId) {
+        console.log("DROP_CHANNEL_ID is missing. Egg Drops will not send.");
+        return;
+      }
+
+      const dropChannel = guild.channels.cache.get(dropChannelId);
 
       if (!dropChannel) {
-        console.log("No drop channel found. Add DROP_CHANNEL_ID in Railway.");
+        console.log(`DROP_CHANNEL_ID is invalid or bot cannot see it: ${dropChannelId}`);
         return;
       }
 
@@ -184,13 +182,11 @@ async function handleDropClaim(interaction) {
       `🎉 **EGG DROP CLAIMED!** 🎉\n\n` +
       `${interaction.user} was the quickest and claimed the drop!\n\n` +
       `🥚 **Reward:** ${reward} Eggs\n` +
-      `🏆 **Winner:** ${username}\n\n` +
-      `GG. Stay active for the next drop.`,
+      `🏆 **Winner:** ${username}`,
     components: [row],
   });
 
   activeDrop = null;
-
   return true;
 }
 
