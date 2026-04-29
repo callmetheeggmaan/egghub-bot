@@ -8,8 +8,8 @@ const pool = require("../db/pool");
 
 let activeDrop = null;
 
-const DROP_INTERVAL = 5 * 60 * 1000;
-const DROP_EXPIRE_TIME = 60 * 1000;
+const DROP_INTERVAL = 5 * 60 * 1000; // every 5 minutes
+const DROP_EXPIRE_TIME = 60 * 1000; // drop lasts 60 seconds
 
 function getRandomReward() {
   const rewards = [
@@ -36,6 +36,7 @@ function createDropId() {
   return `${Date.now()}${Math.floor(Math.random() * 999999)}`;
 }
 
+// not used but kept so bot.js doesn’t break
 function trackDropActivity() {
   return;
 }
@@ -70,6 +71,7 @@ async function spawnDrop(channel) {
     claimed: false,
   };
 
+  // EXPIRY HANDLER (your requested version)
   setTimeout(async () => {
     if (!activeDrop) return;
     if (activeDrop.id !== dropId) return;
@@ -77,20 +79,18 @@ async function spawnDrop(channel) {
 
     activeDrop = null;
 
-    const expiredButton = ButtonBuilder.from(button)
-      .setLabel("Drop expired")
-      .setStyle(ButtonStyle.Secondary)
-      .setEmoji("⌛")
-      .setDisabled(true);
+    try {
+      await dropMessage.edit({
+        content: `⌛ Drop expired...`,
+        components: [],
+      });
 
-    const expiredRow = new ActionRowBuilder().addComponents(expiredButton);
-
-    await dropMessage.edit({
-      content:
-        `⌛ **EGG DROP EXPIRED**\n\n` +
-        `Nobody claimed the **${reward} Eggs** in time.`,
-      components: [expiredRow],
-    }).catch(() => null);
+      setTimeout(() => {
+        dropMessage.delete().catch(() => null);
+      }, 3000);
+    } catch (err) {
+      console.log("Failed to clean expired drop message");
+    }
   }, DROP_EXPIRE_TIME);
 }
 
@@ -107,14 +107,14 @@ function startSmartDrops(client) {
       const dropChannelId = process.env.DROP_CHANNEL_ID;
 
       if (!dropChannelId) {
-        console.log("DROP_CHANNEL_ID is missing. Egg Drops will not send.");
+        console.log("DROP_CHANNEL_ID missing");
         return;
       }
 
       const dropChannel = guild.channels.cache.get(dropChannelId);
 
       if (!dropChannel) {
-        console.log(`DROP_CHANNEL_ID is invalid or bot cannot see it: ${dropChannelId}`);
+        console.log("Invalid DROP_CHANNEL_ID");
         return;
       }
 
@@ -170,7 +170,7 @@ async function handleDropClaim(interaction) {
   );
 
   const claimedButton = new ButtonBuilder()
-    .setCustomId("drop_claimed")
+    .setCustomId("claimed_drop")
     .setLabel(`Claimed by ${username}`)
     .setStyle(ButtonStyle.Secondary)
     .setEmoji("✅")
@@ -184,7 +184,7 @@ async function handleDropClaim(interaction) {
       `${interaction.user} was the quickest to grab it.\n\n` +
       `🥚 **Reward:** ${reward} Eggs\n` +
       `🏆 **Winner:** ${username}\n\n` +
-      `Stay active. The next drop will appear soon.`,
+      `Stay active for the next drop.`,
     components: [row],
   });
 
