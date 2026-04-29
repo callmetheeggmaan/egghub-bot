@@ -6,7 +6,7 @@ const {
 
 const pool = require("../db/pool");
 
-let dropActive = false;
+let activeDrop = null;
 
 const DROP_INTERVAL = 5 * 60 * 1000; // every 5 minutes
 const DROP_EXPIRE_TIME = 60 * 1000; // drop lasts 60 seconds
@@ -35,21 +35,23 @@ function getRandomReward() {
   return 10;
 }
 
+function createDropId() {
+  return `${Date.now()}_${Math.floor(Math.random() * 999999)}`;
+}
+
 // Kept so bot.js does not break.
-// It no longer needs to track messages.
 function trackDropActivity(message) {
   return;
 }
 
 async function spawnDrop(channel) {
-  if (dropActive) return;
-
-  dropActive = true;
+  if (activeDrop) return;
 
   const reward = getRandomReward();
+  const dropId = createDropId();
 
   const button = new ButtonBuilder()
-    .setCustomId(`claim_drop_${reward}`)
+    .setCustomId(`claim_drop_${dropId}_${reward}`)
     .setLabel(`Claim ${reward} Eggs`)
     .setStyle(ButtonStyle.Success)
     .setEmoji("🥚");
@@ -58,23 +60,42 @@ async function spawnDrop(channel) {
 
   const dropMessage = await channel.send({
     content:
-      `🥚 **Egg Drop!**\n\n` +
-      `A random drop has appeared.\n` +
-      `First person to click wins **${reward} Eggs**!`,
+      `🥚 **EGG DROP HAS APPEARED!** 🥚\n\n` +
+      `A random Egg Drop has landed in the server.\n` +
+      `First person to click the button wins **${reward} Eggs**!\n\n` +
+      `⏳ You have **60 seconds** to claim it.`,
     components: [row],
   });
 
+  activeDrop = {
+    id: dropId,
+    reward,
+    messageId: dropMessage.id,
+    channelId: channel.id,
+    claimed: false,
+  };
+
   setTimeout(async () => {
-    if (!dropActive) return;
+    if (!activeDrop) return;
+    if (activeDrop.id !== dropId) return;
+    if (activeDrop.claimed) return;
 
-    dropActive = false;
+    activeDrop = null;
 
-    const disabledButton = ButtonBuilder.from(button).setDisabled(true);
-    const disabledRow = new ActionRowBuilder().addComponents(disabledButton);
+    const expiredButton = ButtonBuilder.from(button)
+      .setLabel("Drop expired")
+      .setStyle(ButtonStyle.Secondary)
+      .setEmoji("⌛")
+      .setDisabled(true);
+
+    const expiredRow = new ActionRowBuilder().addComponents(expiredButton);
 
     await dropMessage.edit({
-      content: `⌛ **Egg Drop expired!** Nobody claimed it.`,
-      components: [disabledRow],
+      content:
+        `⌛ **EGG DROP EXPIRED**\n\n` +
+        `Nobody claimed the **${reward} Eggs** in time.\n` +
+        `Another drop will appear soon.`,
+      components: [expiredRow],
     }).catch(() => null);
   }, DROP_EXPIRE_TIME);
 }
@@ -84,7 +105,7 @@ function startSmartDrops(client) {
 
   setInterval(async () => {
     try {
-      if (dropActive) return;
+      if (activeDrop) return;
 
       const guild = client.guilds.cache.first();
 
@@ -112,7 +133,7 @@ function startSmartDrops(client) {
 async function handleDropClaim(interaction) {
   if (!interaction.customId.startsWith("claim_drop_")) return false;
 
-  if (!dropActive) {
+  if (!activeDrop) {
     await interaction.reply({
       content: "This drop has already been claimed or expired.",
       ephemeral: true,
@@ -120,9 +141,20 @@ async function handleDropClaim(interaction) {
     return true;
   }
 
-  dropActive = false;
+  const parts = interaction.customId.split("_");
+  const dropId = parts[2];
+  const reward = Number(parts[3]);
 
-  const reward = Number(interaction.customId.replace("claim_drop_", ""));
+  if (activeDrop.id !== dropId || activeDrop.messageId !== interaction.message.id) {
+    await interaction.reply({
+      content: "This drop has already been claimed or expired.",
+      ephemeral: true,
+    });
+    return true;
+  }
+
+  activeDrop.claimed = true;
+
   const userId = interaction.user.id;
   const username = interaction.user.username;
 
@@ -138,19 +170,26 @@ async function handleDropClaim(interaction) {
     [userId, username, reward]
   );
 
-  const button = new ButtonBuilder()
-    .setCustomId("claimed_drop")
+  const claimedButton = new ButtonBuilder()
+    .setCustomId("drop_claimed")
     .setLabel(`Claimed by ${username}`)
     .setStyle(ButtonStyle.Secondary)
     .setEmoji("✅")
     .setDisabled(true);
 
-  const row = new ActionRowBuilder().addComponents(button);
+  const row = new ActionRowBuilder().addComponents(claimedButton);
 
   await interaction.update({
-    content: `🥚 **Egg Drop Claimed!**\n${interaction.user} won **${reward} Eggs**!`,
+    content:
+      `🎉 **EGG DROP CLAIMED!** 🎉\n\n` +
+      `${interaction.user} was the quickest and claimed the drop!\n\n` +
+      `🥚 **Reward:** ${reward} Eggs\n` +
+      `🏆 **Winner:** ${username}\n\n` +
+      `GG. Stay active for the next drop.`,
     components: [row],
   });
+
+  activeDrop = null;
 
   return true;
 }
