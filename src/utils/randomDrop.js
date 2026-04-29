@@ -7,13 +7,9 @@ const {
 const pool = require("../db/pool");
 
 let dropActive = false;
-let lastDropTime = 0;
-let messageCount = 0;
 
-const DROP_CHECK_INTERVAL = 5 * 60 * 1000; // checks every 5 minutes
+const DROP_INTERVAL = 5 * 60 * 1000; // every 5 minutes
 const DROP_EXPIRE_TIME = 60 * 1000; // drop lasts 60 seconds
-const MIN_MESSAGES_FOR_DROP = 5; // minimum chat activity needed
-const MAX_DROP_CHANCE = 0.85; // max 85% chance
 
 function getRandomReward() {
   const rewards = [
@@ -30,6 +26,7 @@ function getRandomReward() {
 
   for (const reward of rewards) {
     total += reward.chance;
+
     if (roll <= total) {
       return reward.amount;
     }
@@ -38,18 +35,16 @@ function getRandomReward() {
   return 10;
 }
 
+// Kept so bot.js does not break.
+// It no longer needs to track messages.
 function trackDropActivity(message) {
-  if (!message.guild) return;
-  if (message.author.bot) return;
-
-  messageCount += 1;
+  return;
 }
 
 async function spawnDrop(channel) {
   if (dropActive) return;
 
   dropActive = true;
-  lastDropTime = Date.now();
 
   const reward = getRandomReward();
 
@@ -62,7 +57,10 @@ async function spawnDrop(channel) {
   const row = new ActionRowBuilder().addComponents(button);
 
   const dropMessage = await channel.send({
-    content: `🥚 **Smart Egg Drop!**\nChat activity triggered a drop!\nFirst person to click wins **${reward} Eggs**!`,
+    content:
+      `🥚 **Egg Drop!**\n\n` +
+      `A random drop has appeared.\n` +
+      `First person to click wins **${reward} Eggs**!`,
     components: [row],
   });
 
@@ -82,35 +80,16 @@ async function spawnDrop(channel) {
 }
 
 function startSmartDrops(client) {
+  console.log("Timed Egg Drops started. Drops will run every 5 minutes.");
+
   setInterval(async () => {
     try {
-      if (dropActive) {
-        messageCount = 0;
-        return;
-      }
-
-      const now = Date.now();
-
-      if (now - lastDropTime < DROP_CHECK_INTERVAL) {
-        messageCount = 0;
-        return;
-      }
-
-      if (messageCount < MIN_MESSAGES_FOR_DROP) {
-        messageCount = 0;
-        return;
-      }
-
-      const chance = Math.min(
-        messageCount / 25,
-        MAX_DROP_CHANCE
-      );
-
-      const roll = Math.random();
+      if (dropActive) return;
 
       const guild = client.guilds.cache.first();
+
       if (!guild) {
-        messageCount = 0;
+        console.log("No guild found for Egg Drop.");
         return;
       }
 
@@ -119,21 +98,15 @@ function startSmartDrops(client) {
         guild.channels.cache.get(process.env.WELCOME_CHANNEL_ID);
 
       if (!dropChannel) {
-        console.log("No drop channel found. Add DROP_CHANNEL_ID or WELCOME_CHANNEL_ID.");
-        messageCount = 0;
+        console.log("No drop channel found. Add DROP_CHANNEL_ID in Railway.");
         return;
       }
 
-      if (roll <= chance) {
-        await spawnDrop(dropChannel);
-      }
-
-      messageCount = 0;
+      await spawnDrop(dropChannel);
     } catch (error) {
-      console.error("Smart drop error:", error);
-      messageCount = 0;
+      console.error("Timed drop error:", error);
     }
-  }, DROP_CHECK_INTERVAL);
+  }, DROP_INTERVAL);
 }
 
 async function handleDropClaim(interaction) {
