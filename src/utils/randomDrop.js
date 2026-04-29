@@ -146,7 +146,7 @@ async function handleDropClaim(interaction) {
   if (!activeDrop) {
     await interaction.reply({
       content: "This drop has already been claimed or expired.",
-      ephemeral: true,
+      flags: 64,
     });
     return true;
   }
@@ -162,7 +162,7 @@ async function handleDropClaim(interaction) {
   ) {
     await interaction.reply({
       content: "This drop has already been claimed or expired.",
-      ephemeral: true,
+      flags: 64,
     });
     return true;
   }
