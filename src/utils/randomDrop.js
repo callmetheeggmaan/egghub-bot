@@ -15,7 +15,7 @@ function getRandomReward() {
   const rewards = [
     { amount: 10, chance: 35 },
     { amount: 15, chance: 25 },
-    { amount: 25, chance: 20 },
+    { amount: 20, chance: 20 },
     { amount: 50, chance: 12 },
     { amount: 75, chance: 6 },
     { amount: 100, chance: 2 },
@@ -33,7 +33,7 @@ function getRandomReward() {
 }
 
 function createDropId() {
-  return `${Date.now()}_${Math.floor(Math.random() * 999999)}`;
+  return `${Date.now()}${Math.floor(Math.random() * 999999)}`;
 }
 
 function trackDropActivity() {
@@ -47,7 +47,7 @@ async function spawnDrop(channel) {
   const dropId = createDropId();
 
   const button = new ButtonBuilder()
-    .setCustomId(`claim_drop_${dropId}_${reward}`)
+    .setCustomId(`claimdrop:${dropId}:${reward}`)
     .setLabel(`Claim ${reward} Eggs`)
     .setStyle(ButtonStyle.Success)
     .setEmoji("🥚");
@@ -102,10 +102,7 @@ function startSmartDrops(client) {
       if (activeDrop) return;
 
       const guild = client.guilds.cache.first();
-      if (!guild) {
-        console.log("No guild found for Egg Drop.");
-        return;
-      }
+      if (!guild) return;
 
       const dropChannelId = process.env.DROP_CHANNEL_ID;
 
@@ -129,7 +126,7 @@ function startSmartDrops(client) {
 }
 
 async function handleDropClaim(interaction) {
-  if (!interaction.customId.startsWith("claim_drop_")) return false;
+  if (!interaction.customId.startsWith("claimdrop:")) return false;
 
   if (!activeDrop) {
     await interaction.reply({
@@ -139,11 +136,15 @@ async function handleDropClaim(interaction) {
     return true;
   }
 
-  const parts = interaction.customId.split("_");
-  const dropId = parts[2];
-  const reward = Number(parts[3]);
+  const parts = interaction.customId.split(":");
+  const dropId = parts[1];
+  const reward = Number(parts[2]);
 
-  if (activeDrop.id !== dropId || activeDrop.messageId !== interaction.message.id) {
+  if (
+    activeDrop.id !== dropId ||
+    activeDrop.messageId !== interaction.message.id ||
+    activeDrop.claimed
+  ) {
     await interaction.reply({
       content: "This drop has already been claimed or expired.",
       ephemeral: true,
@@ -180,9 +181,10 @@ async function handleDropClaim(interaction) {
   await interaction.update({
     content:
       `🎉 **EGG DROP CLAIMED!** 🎉\n\n` +
-      `${interaction.user} was the quickest and claimed the drop!\n\n` +
+      `${interaction.user} was the quickest to grab it.\n\n` +
       `🥚 **Reward:** ${reward} Eggs\n` +
-      `🏆 **Winner:** ${username}`,
+      `🏆 **Winner:** ${username}\n\n` +
+      `Stay active. The next drop will appear soon.`,
     components: [row],
   });
 
