@@ -3,6 +3,17 @@ const pool = require("../db/pool");
 let leaderboardMessageId = null;
 let secondsUntilUpdate = 60;
 
+const UPDATE_SECONDS = 60;
+const TIMER_TICK_SECONDS = 2;
+
+function buildProgressBar(secondsLeft) {
+  const totalBlocks = 12;
+  const filledBlocks = Math.ceil((secondsLeft / UPDATE_SECONDS) * totalBlocks);
+  const emptyBlocks = totalBlocks - filledBlocks;
+
+  return "🟩".repeat(filledBlocks) + "⬛".repeat(emptyBlocks);
+}
+
 async function buildLeaderboardText() {
   const result = await pool.query(
     "SELECT username, eggs FROM users ORDER BY eggs DESC LIMIT 10"
@@ -26,6 +37,7 @@ async function buildLeaderboardText() {
 
   text += "\n⏱️ Updates automatically every 60 seconds.";
   text += `\n⏳ Next update in **${secondsUntilUpdate} seconds**.`;
+  text += `\n${buildProgressBar(secondsUntilUpdate)}`;
   text += "\n💬 Stay active to climb the leaderboard.";
   text += "\n🎁 Top players may win prizes.";
 
@@ -49,7 +61,7 @@ async function startLiveLeaderboard(client) {
 
   async function updateLeaderboard() {
     try {
-      secondsUntilUpdate = 60;
+      secondsUntilUpdate = UPDATE_SECONDS;
 
       const text = await buildLeaderboardText();
 
@@ -104,7 +116,7 @@ async function startLiveLeaderboard(client) {
   await updateLeaderboard();
 
   setInterval(async () => {
-    secondsUntilUpdate -= 10;
+    secondsUntilUpdate -= TIMER_TICK_SECONDS;
 
     if (secondsUntilUpdate <= 0) {
       await updateLeaderboard();
@@ -112,7 +124,7 @@ async function startLiveLeaderboard(client) {
     }
 
     await updateTimerOnly();
-  }, 10 * 1000);
+  }, TIMER_TICK_SECONDS * 1000);
 
   console.log("Live leaderboard started.");
 }
