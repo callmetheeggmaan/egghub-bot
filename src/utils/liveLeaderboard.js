@@ -8,10 +8,23 @@ const TIMER_TICK_SECONDS = 2;
 
 function buildProgressBar(secondsLeft) {
   const totalBlocks = 12;
-  const filledBlocks = Math.ceil((secondsLeft / UPDATE_SECONDS) * totalBlocks);
+  const progress = secondsLeft / UPDATE_SECONDS;
+  const filledBlocks = Math.ceil(progress * totalBlocks);
   const emptyBlocks = totalBlocks - filledBlocks;
 
-  return "🟩".repeat(filledBlocks) + "⬛".repeat(emptyBlocks);
+  let barColor = "🟩"; // green default
+
+  if (progress <= 0.5) barColor = "🟨"; // mid = yellow
+  if (progress <= 0.2) barColor = "🟥"; // low = red
+
+  let bar = barColor.repeat(filledBlocks) + "⬛".repeat(emptyBlocks);
+
+  // Flash effect last 10 seconds
+  if (secondsLeft <= 10) {
+    bar = (secondsLeft % 4 === 0 ? "⚠️ " : "") + bar;
+  }
+
+  return bar;
 }
 
 async function buildLeaderboardText() {
