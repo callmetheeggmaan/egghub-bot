@@ -5,7 +5,6 @@ const {
   AudioPlayerStatus,
   VoiceConnectionStatus,
   entersState,
-  StreamType,
 } = require("@discordjs/voice");
 
 const play = require("play-dl");
@@ -29,8 +28,6 @@ function getQueue(guildId) {
 }
 
 async function resolveSong(query) {
-  let url = query;
-
   if (play.yt_validate(query) === "video") {
     const info = await play.video_info(query);
 
@@ -41,20 +38,13 @@ async function resolveSong(query) {
     };
   }
 
-  if (query.includes("spotify.com")) {
-    return {
-      error:
-        "Spotify links are not fully enabled yet. Use a song name or YouTube link for now.",
-    };
-  }
-
   const results = await play.search(query, {
     limit: 1,
     source: { youtube: "video" },
   });
 
   if (!results || results.length === 0) {
-    return { error: "No results found." };
+    return { error: "No YouTube results found." };
   }
 
   return {
@@ -88,10 +78,12 @@ async function playNext(guildId) {
   queue.playing = true;
 
   try {
-    const stream = await play.stream(song.url);
+    const stream = await play.stream(song.url, {
+      discordPlayerCompatibility: true,
+    });
 
     const resource = createAudioResource(stream.stream, {
-      inputType: stream.type || StreamType.Arbitrary,
+      inputType: stream.type,
     });
 
     queue.player.play(resource);
@@ -102,10 +94,12 @@ async function playNext(guildId) {
       );
     }
   } catch (err) {
-    console.error("Music play error:", err);
+    console.error("Music stream error:", err);
 
     if (queue.textChannel) {
-      await queue.textChannel.send("❌ Failed to play this track. Skipping...");
+      await queue.textChannel.send(
+        `❌ Failed to play this track. Skipping...\n\`${err.message || "Unknown stream error"}\``
+      );
     }
 
     playNext(guildId);
@@ -117,9 +111,7 @@ async function addSong(interaction, query) {
   const voiceChannel = member.voice.channel;
 
   if (!voiceChannel) {
-    return {
-      error: "You need to join a voice channel first.",
-    };
+    return { error: "You need to join a voice channel first." };
   }
 
   const song = await resolveSong(query);
@@ -138,7 +130,7 @@ async function addSong(interaction, query) {
       channelId: voiceChannel.id,
       guildId: interaction.guild.id,
       adapterCreator: interaction.guild.voiceAdapterCreator,
-      selfDeaf: true,
+      selfDeaf: false,
     });
 
     queue.connection.subscribe(queue.player);
