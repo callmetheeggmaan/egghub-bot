@@ -20,6 +20,8 @@ const {
   Partials,
 } = require("discord.js");
 
+const DISBOARD_BOT_ID = "302050872383242240";
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -158,14 +160,15 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
 
 // Interaction handler
 client.on(Events.InteractionCreate, async interaction => {
-  // Random drop claim button
+  // Egg Drop claim button
   if (interaction.isButton()) {
     const handled = await handleDropClaim(interaction);
     if (handled) return;
   }
 
-  // Role selector
+  // Dropdowns
   if (interaction.isStringSelectMenu()) {
+    // Role selector
     if (interaction.customId === "role_select") {
       const rolesMap = {
         streamer: process.env.ROLE_STREAMER,
@@ -196,7 +199,7 @@ client.on(Events.InteractionCreate, async interaction => {
       });
     }
 
-    // Shop select
+    // Shop selector
     if (interaction.customId === "shop_select") {
       const selected = interaction.values[0];
       return buyItem(interaction, selected);
@@ -207,7 +210,6 @@ client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
-
   if (!command) return;
 
   try {
@@ -229,15 +231,81 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// Chat earn system + smart drop activity tracking
+// Chat earning + DISBOARD bump reward system
 const messageCooldowns = new Map();
+const rewardedBumps = new Set();
 
 client.on(Events.MessageCreate, async message => {
-  if (message.author.bot) return;
   if (!message.guild) return;
 
+  // ================= DISBOARD BUMP REWARD SYSTEM =================
+  if (
+    message.author.id === DISBOARD_BOT_ID &&
+    message.embeds.length > 0
+  ) {
+    try {
+      const embed = message.embeds[0];
+
+      const embedText = [
+        embed.title || "",
+        embed.description || "",
+        ...(embed.fields || []).map(field => `${field.name || ""} ${field.value || ""}`),
+      ].join(" ");
+
+      if (embedText.includes("Bump done")) {
+        if (rewardedBumps.has(message.id)) return;
+        rewardedBumps.add(message.id);
+
+        const channel = message.channel;
+        const messages = await channel.messages.fetch({ limit: 15 });
+
+        const bumpUserMessage = messages.find(m =>
+          m.author.id !== DISBOARD_BOT_ID &&
+          m.interaction &&
+          m.interaction.commandName === "bump"
+        );
+
+        if (!bumpUserMessage) {
+          console.log("Bump detected but bumper user not found.");
+          return;
+        }
+
+        const userId = bumpUserMessage.author.id;
+        const username = bumpUserMessage.author.username;
+        const rewardAmount = 200;
+
+        await pool.query(
+          `
+          INSERT INTO users (discord_id, username, eggs)
+          VALUES ($1, $2, $3)
+          ON CONFLICT (discord_id)
+          DO UPDATE SET
+            eggs = users.eggs + $3,
+            username = EXCLUDED.username
+          `,
+          [userId, username, rewardAmount]
+        );
+
+        await channel.send(
+          `🚀 **BUMP REWARD!**\n${bumpUserMessage.author} earned **${rewardAmount} Eggs** for bumping EggHub! 🥚`
+        );
+
+        console.log(`${username} earned ${rewardAmount} Eggs for bumping.`);
+      }
+    } catch (err) {
+      console.error("Bump reward error:", err);
+    }
+
+    return;
+  }
+
+  // Ignore all other bot messages
+  if (message.author.bot) return;
+
+  // Track message activity for drop system compatibility
   trackDropActivity(message);
 
+  // ================= CHAT EARN SYSTEM =================
   const userId = message.author.id;
   const username = message.author.username;
   const now = Date.now();
