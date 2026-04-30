@@ -5,9 +5,11 @@ const {
   AudioPlayerStatus,
   VoiceConnectionStatus,
   entersState,
+  StreamType,
 } = require("@discordjs/voice");
 
 const play = require("play-dl");
+const ytdl = require("@distube/ytdl-core");
 
 const queues = new Map();
 
@@ -28,13 +30,15 @@ function getQueue(guildId) {
 }
 
 async function resolveSong(query) {
-  if (play.yt_validate(query) === "video") {
-    const info = await play.video_info(query);
+  if (ytdl.validateURL(query)) {
+    const info = await ytdl.getInfo(query);
 
     return {
-      title: info.video_details.title,
-      url: info.video_details.url,
-      duration: info.video_details.durationRaw || "Unknown",
+      title: info.videoDetails.title,
+      url: info.videoDetails.video_url,
+      duration: info.videoDetails.lengthSeconds
+        ? `${Math.floor(info.videoDetails.lengthSeconds / 60)}:${String(info.videoDetails.lengthSeconds % 60).padStart(2, "0")}`
+        : "Unknown",
     };
   }
 
@@ -43,7 +47,7 @@ async function resolveSong(query) {
     source: { youtube: "video" },
   });
 
-  if (!results || results.length === 0) {
+  if (!results || results.length === 0 || !results[0].url) {
     return { error: "No YouTube results found." };
   }
 
@@ -78,12 +82,18 @@ async function playNext(guildId) {
   queue.playing = true;
 
   try {
-    const stream = await play.stream(song.url, {
-      discordPlayerCompatibility: true,
+    if (!ytdl.validateURL(song.url)) {
+      throw new Error("Invalid YouTube URL from search result.");
+    }
+
+    const stream = ytdl(song.url, {
+      filter: "audioonly",
+      quality: "highestaudio",
+      highWaterMark: 1 << 25,
     });
 
-    const resource = createAudioResource(stream.stream, {
-      inputType: stream.type,
+    const resource = createAudioResource(stream, {
+      inputType: StreamType.Arbitrary,
     });
 
     queue.player.play(resource);
