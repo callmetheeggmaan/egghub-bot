@@ -4,7 +4,7 @@ let leaderboardMessageId = null;
 let secondsUntilUpdate = 60;
 
 const UPDATE_SECONDS = 60;
-const TIMER_TICK_SECONDS = 2;
+const TIMER_TICK_SECONDS = 10;
 
 function buildProgressBar(secondsLeft) {
   const totalBlocks = 12;
