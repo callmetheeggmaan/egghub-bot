@@ -33,20 +33,18 @@ function getMultiplier(elapsedMs) {
 }
 
 function makeProgressBar(multiplier, crashPoint, status) {
-  const blocks = 14;
+  const blocks = 16;
   const ratio = Math.min(multiplier / Math.max(crashPoint, 2), 1);
+
   const filled = Math.max(1, Math.floor(ratio * blocks));
   const empty = blocks - filled;
 
-  if (status === "crashed") {
-    return `${"━".repeat(Math.max(0, filled - 1))}💥${"─".repeat(empty)}`;
-  }
+  let bar = "▰".repeat(filled) + "▱".repeat(empty);
 
-  if (status === "cashed") {
-    return `${"━".repeat(Math.max(0, filled - 1))}💰${"─".repeat(empty)}`;
-  }
+  if (status === "crashed") return `💥 ${bar}`;
+  if (status === "cashed") return `💰 ${bar}`;
 
-  return `${"━".repeat(Math.max(0, filled - 1))}🚀${"─".repeat(empty)} 💰`;
+  return `🚀 ${bar}`;
 }
 
 function makeCashoutButton(userId, disabled = false, label = "CASH OUT") {
@@ -71,70 +69,51 @@ function makeEmbed({
 }) {
   let color = 0xf1c40f;
   let title = "🚀 EGG CRASH";
-  let description = "Cash out before it crashes.";
+
+  let mainDisplay = `**${multiplier.toFixed(2)}x**`;
+
+  if (status === "playing") {
+    if (multiplier >= 5) mainDisplay = `🔥 **${multiplier.toFixed(2)}x**`;
+    if (multiplier >= 10) mainDisplay = `🚨 **${multiplier.toFixed(2)}x**`;
+  }
 
   if (status === "cashed") {
     color = 0x2ecc71;
     title = "✅ CASHED OUT";
-    description = `${user} escaped at **${multiplier.toFixed(2)}x**.`;
+    mainDisplay = `💰 **${multiplier.toFixed(2)}x**`;
   }
 
   if (status === "crashed") {
     color = 0xe74c3c;
     title = "💥 CRASHED";
-    description = `${user} crashed at **${crashPoint.toFixed(2)}x**.`;
+    mainDisplay = `💥 **${crashPoint.toFixed(2)}x**`;
   }
 
-  const fields = [
-    {
-      name: "🥚 Bet",
-      value: `${bet} Eggs`,
-      inline: true,
-    },
-    {
-      name: "📈 Multiplier",
-      value: `${multiplier.toFixed(2)}x`,
-      inline: true,
-    },
-    {
-      name: "💰 Potential Win",
-      value: `${potentialWin} Eggs`,
-      inline: true,
-    },
-    {
-      name: "🎮 Game",
-      value: makeProgressBar(multiplier, crashPoint, status),
-      inline: false,
-    },
-  ];
+  let description =
+    `\n${mainDisplay}\n\n` +
+    `${makeProgressBar(multiplier, crashPoint, status)}\n`;
+
+  let footer = "Press CASH OUT before it crashes.";
 
   if (status === "cashed") {
-    fields.push({
-      name: "🏆 Result",
-      value: `Won **${winnings} Eggs**`,
-      inline: false,
-    });
+    description += `\n🏆 You won **${winnings} Eggs**`;
+    footer = "Clean exit.";
   }
 
   if (status === "crashed") {
-    fields.push({
-      name: "❌ Result",
-      value: `Lost **${bet} Eggs**`,
-      inline: false,
-    });
+    description += `\n❌ You lost **${bet} Eggs**`;
+    footer = "Too slow.";
   }
 
   return new EmbedBuilder()
     .setColor(color)
     .setTitle(title)
     .setDescription(description)
-    .addFields(fields)
-    .setFooter({
-      text:
-        status === "playing"
-          ? "Press CASH OUT before it crashes."
-          : "EggHub Crash",
-    });
+    .addFields(
+      { name: "🥚 Bet", value: `${bet}`, inline: true },
+      { name: "💰 Value", value: `${potentialWin}`, inline: true }
+    )
+    .setFooter({ text: footer });
 }
 
 module.exports = {
@@ -160,16 +139,9 @@ module.exports = {
       });
     }
 
-    if (bet < MIN_BET) {
+    if (bet < MIN_BET || bet > MAX_BET) {
       return interaction.reply({
-        content: `Minimum bet is ${MIN_BET} Eggs.`,
-        ephemeral: true,
-      });
-    }
-
-    if (bet > MAX_BET) {
-      return interaction.reply({
-        content: `Maximum bet is ${MAX_BET} Eggs.`,
+        content: `Bet must be between ${MIN_BET} and ${MAX_BET}.`,
         ephemeral: true,
       });
     }
@@ -177,61 +149,32 @@ module.exports = {
     activeCrashGames.add(userId);
 
     let gameInterval = null;
-    let gameTimeout = null;
     let gameOver = false;
-    let cashedOut = false;
-    let crashed = false;
     let multiplier = 1.0;
-    let latestMultiplier = 1.0;
-    let message = null;
 
     try {
-      const userResult = await pool.query(
+      const result = await pool.query(
         "SELECT eggs FROM users WHERE discord_id = $1",
         [userId]
       );
 
-      if (userResult.rows.length === 0) {
-        activeCrashGames.delete(userId);
-
-        return interaction.reply({
-          content: "You have no Eggs yet.",
-          ephemeral: true,
-        });
-      }
-
-      const currentEggs = Number(userResult.rows[0].eggs);
+      const currentEggs = result.rows[0]?.eggs || 0;
 
       if (currentEggs < bet) {
         activeCrashGames.delete(userId);
-
         return interaction.reply({
           content: `You only have ${currentEggs} Eggs.`,
           ephemeral: true,
         });
       }
 
-      const removeBetResult = await pool.query(
-        `
-        UPDATE users
-        SET eggs = eggs - $1, username = $2
-        WHERE discord_id = $3 AND eggs >= $1
-        RETURNING eggs
-        `,
-        [bet, username, userId]
+      await pool.query(
+        "UPDATE users SET eggs = eggs - $1 WHERE discord_id = $2",
+        [bet, userId]
       );
 
-      if (removeBetResult.rows.length === 0) {
-        activeCrashGames.delete(userId);
-
-        return interaction.reply({
-          content: "You do not have enough Eggs for that bet.",
-          ephemeral: true,
-        });
-      }
-
       const crashPoint = randomCrashPoint();
-      const startedAt = Date.now();
+      const startTime = Date.now();
 
       await interaction.reply({
         embeds: [
@@ -247,40 +190,21 @@ module.exports = {
         components: [makeCashoutButton(userId)],
       });
 
-      message = await interaction.fetchReply();
+      const message = await interaction.fetchReply();
 
       const collector = message.createMessageComponentCollector({
-        time: MAX_GAME_TIME_MS + 5000,
+        time: MAX_GAME_TIME_MS,
       });
 
-      collector.on("collect", async buttonInteraction => {
-        if (!buttonInteraction.customId.startsWith("crash_cashout_")) return;
+      collector.on("collect", async i => {
+        if (i.user.id !== userId || gameOver) return;
 
-        if (buttonInteraction.user.id !== userId) {
-          return buttonInteraction.reply({
-            content: "This is not your Crash game.",
-            ephemeral: true,
-          });
-        }
+        const elapsed = Date.now() - startTime;
+        const cashMultiplier = getMultiplier(elapsed);
 
-        if (gameOver || cashedOut || crashed) {
-          return buttonInteraction.reply({
-            content: "This Crash game is already over.",
-            ephemeral: true,
-          });
-        }
-
-        const elapsed = Date.now() - startedAt;
-        const cashoutMultiplier = getMultiplier(elapsed);
-
-        if (cashoutMultiplier >= crashPoint) {
-          crashed = true;
+        if (cashMultiplier >= crashPoint) {
           gameOver = true;
-
-          clearInterval(gameInterval);
-          clearTimeout(gameTimeout);
-
-          await buttonInteraction.update({
+          await i.update({
             embeds: [
               makeEmbed({
                 user: interaction.user,
@@ -292,35 +216,25 @@ module.exports = {
               }),
             ],
             components: [makeCashoutButton(userId, true, "CRASHED")],
-          }).catch(() => null);
-
-          collector.stop("crashed");
+          });
           return;
         }
 
-        cashedOut = true;
-        gameOver = true;
-
-        clearInterval(gameInterval);
-        clearTimeout(gameTimeout);
-
-        const winnings = Math.floor(bet * cashoutMultiplier);
+        const winnings = Math.floor(bet * cashMultiplier);
 
         await pool.query(
-          `
-          UPDATE users
-          SET eggs = eggs + $1, username = $2
-          WHERE discord_id = $3
-          `,
-          [winnings, username, userId]
+          "UPDATE users SET eggs = eggs + $1 WHERE discord_id = $2",
+          [winnings, userId]
         );
 
-        await buttonInteraction.update({
+        gameOver = true;
+
+        await i.update({
           embeds: [
             makeEmbed({
               user: interaction.user,
               bet,
-              multiplier: cashoutMultiplier,
+              multiplier: cashMultiplier,
               potentialWin: winnings,
               status: "cashed",
               crashPoint,
@@ -328,27 +242,18 @@ module.exports = {
             }),
           ],
           components: [makeCashoutButton(userId, true, "CASHED OUT")],
-        }).catch(() => null);
-
-        collector.stop("cashed");
+        });
       });
 
       gameInterval = setInterval(async () => {
-        if (gameOver || cashedOut || crashed) {
-          clearInterval(gameInterval);
-          return;
-        }
+        if (gameOver) return clearInterval(gameInterval);
 
-        const elapsed = Date.now() - startedAt;
+        const elapsed = Date.now() - startTime;
         multiplier = getMultiplier(elapsed);
-        latestMultiplier = multiplier;
 
         if (multiplier >= crashPoint) {
-          crashed = true;
           gameOver = true;
-
           clearInterval(gameInterval);
-          clearTimeout(gameTimeout);
 
           await message.edit({
             embeds: [
@@ -362,13 +267,10 @@ module.exports = {
               }),
             ],
             components: [makeCashoutButton(userId, true, "CRASHED")],
-          }).catch(() => null);
+          });
 
-          collector.stop("crashed");
           return;
         }
-
-        const potentialWin = Math.floor(bet * multiplier);
 
         await message.edit({
           embeds: [
@@ -376,63 +278,18 @@ module.exports = {
               user: interaction.user,
               bet,
               multiplier,
-              potentialWin,
+              potentialWin: Math.floor(bet * multiplier),
               status: "playing",
               crashPoint,
             }),
           ],
           components: [makeCashoutButton(userId)],
-        }).catch(() => null);
+        });
       }, GAME_TICK_MS);
 
-      gameTimeout = setTimeout(async () => {
-        if (gameOver || cashedOut || crashed) return;
-
-        crashed = true;
-        gameOver = true;
-
-        clearInterval(gameInterval);
-
-        await message.edit({
-          embeds: [
-            makeEmbed({
-              user: interaction.user,
-              bet,
-              multiplier: latestMultiplier,
-              potentialWin: 0,
-              status: "crashed",
-              crashPoint: latestMultiplier,
-            }),
-          ],
-          components: [makeCashoutButton(userId, true, "CRASHED")],
-        }).catch(() => null);
-
-        collector.stop("timeout");
-      }, MAX_GAME_TIME_MS);
-
-      collector.on("end", () => {
-        clearInterval(gameInterval);
-        clearTimeout(gameTimeout);
-        activeCrashGames.delete(userId);
-      });
-    } catch (error) {
-      console.error("Crash command error:", error);
-
-      clearInterval(gameInterval);
-      clearTimeout(gameTimeout);
+    } catch (err) {
+      console.error(err);
       activeCrashGames.delete(userId);
-
-      if (interaction.replied || interaction.deferred) {
-        return interaction.followUp({
-          content: "Crash game failed.",
-          ephemeral: true,
-        }).catch(() => null);
-      }
-
-      return interaction.reply({
-        content: "Crash game failed.",
-        ephemeral: true,
-      }).catch(() => null);
     }
   },
 };
