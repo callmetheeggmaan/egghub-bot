@@ -14,18 +14,17 @@ const MIN_BET = 10;
 const MAX_BET = 1000;
 const GAME_TICK_MS = 1000;
 const MAX_GAME_TIME_MS = 35000;
-const START_DELAY_MS = 3000;
 
 function randomCrashPoint() {
   const roll = Math.random();
 
-  if (roll < 0.20) return Number((1.8 + Math.random() * 0.7).toFixed(2)); // 1.80x - 2.50x
-  if (roll < 0.55) return Number((2.5 + Math.random() * 1.5).toFixed(2)); // 2.50x - 4.00x
-  if (roll < 0.80) return Number((4.0 + Math.random() * 3.0).toFixed(2)); // 4.00x - 7.00x
-  if (roll < 0.94) return Number((7.0 + Math.random() * 5.0).toFixed(2)); // 7.00x - 12.00x
-  if (roll < 0.99) return Number((12.0 + Math.random() * 10.0).toFixed(2)); // 12.00x - 22.00x
+  if (roll < 0.20) return Number((1.8 + Math.random() * 0.7).toFixed(2));
+  if (roll < 0.55) return Number((2.5 + Math.random() * 1.5).toFixed(2));
+  if (roll < 0.80) return Number((4.0 + Math.random() * 3.0).toFixed(2));
+  if (roll < 0.94) return Number((7.0 + Math.random() * 5.0).toFixed(2));
+  if (roll < 0.99) return Number((12.0 + Math.random() * 10.0).toFixed(2));
 
-  return Number((22.0 + Math.random() * 28.0).toFixed(2)); // 22.00x - 50.00x
+  return Number((22.0 + Math.random() * 28.0).toFixed(2));
 }
 
 function getMultiplier(elapsedMs) {
@@ -160,6 +159,8 @@ module.exports = {
     let collector = null;
     let gameOver = false;
     let gameStarted = false;
+    let message = null;
+    let startTime = null;
 
     function cleanup() {
       if (gameInterval) clearInterval(gameInterval);
@@ -220,93 +221,92 @@ module.exports = {
         components: [makeCashoutButton(userId, true, "GET READY")],
       });
 
-      const message = await interaction.fetchReply();
+      message = await interaction.fetchReply();
 
       collector = message.createMessageComponentCollector({
-        time: MAX_GAME_TIME_MS + START_DELAY_MS + 5000,
+        time: MAX_GAME_TIME_MS + 8000,
       });
 
-      let startTime = null;
-
       collector.on("collect", async i => {
-        if (!i.customId.startsWith("crash_cashout_")) return;
+        try {
+          if (!i.customId.startsWith("crash_cashout_")) return;
 
-        if (i.user.id !== userId) {
-          return i.reply({
-            content: "This is not your Crash game.",
-            ephemeral: true,
-          });
-        }
+          if (i.user.id !== userId) {
+            return i.reply({
+              content: "This is not your Crash game.",
+              ephemeral: true,
+            });
+          }
 
-        if (!gameStarted) {
-          return i.reply({
-            content: "The game has not started yet.",
-            ephemeral: true,
-          });
-        }
+          await i.deferUpdate();
 
-        if (gameOver) {
-          return i.reply({
-            content: "This Crash game is already over.",
-            ephemeral: true,
-          });
-        }
+          if (!gameStarted) {
+            return;
+          }
 
-        const elapsed = Date.now() - startTime;
-        const cashMultiplier = getMultiplier(elapsed);
+          if (gameOver) {
+            return;
+          }
 
-        if (cashMultiplier >= crashPoint) {
+          const elapsed = Date.now() - startTime;
+          const cashMultiplier = getMultiplier(elapsed);
+
+          if (cashMultiplier >= crashPoint) {
+            gameOver = true;
+
+            await message.edit({
+              embeds: [
+                makeEmbed({
+                  user: interaction.user,
+                  bet,
+                  multiplier: crashPoint,
+                  potentialWin: 0,
+                  status: "crashed",
+                  crashPoint,
+                }),
+              ],
+              components: [makeCashoutButton(userId, true, "CRASHED")],
+            }).catch(() => null);
+
+            if (collector) collector.stop("crashed");
+            cleanup();
+            return;
+          }
+
+          const winnings = Math.floor(bet * cashMultiplier);
+
+          await pool.query(
+            `
+            UPDATE users
+            SET eggs = eggs + $1, username = $2
+            WHERE discord_id = $3
+            `,
+            [winnings, username, userId]
+          );
+
           gameOver = true;
 
-          await i.update({
+          await message.edit({
             embeds: [
               makeEmbed({
                 user: interaction.user,
                 bet,
-                multiplier: crashPoint,
-                potentialWin: 0,
-                status: "crashed",
+                multiplier: cashMultiplier,
+                potentialWin: winnings,
+                status: "cashed",
                 crashPoint,
+                winnings,
               }),
             ],
-            components: [makeCashoutButton(userId, true, "CRASHED")],
+            components: [makeCashoutButton(userId, true, "CASHED OUT")],
           }).catch(() => null);
 
-          collector.stop("crashed");
+          if (collector) collector.stop("cashed");
           cleanup();
-          return;
+        } catch (err) {
+          console.error("Crash cashout error:", err);
+          cleanup();
         }
-
-        const winnings = Math.floor(bet * cashMultiplier);
-
-        await pool.query(
-          `
-          UPDATE users
-          SET eggs = eggs + $1, username = $2
-          WHERE discord_id = $3
-          `,
-          [winnings, username, userId]
-        );
-
-        gameOver = true;
-
-        await i.update({
-          embeds: [
-            makeEmbed({
-              user: interaction.user,
-              bet,
-              multiplier: cashMultiplier,
-              potentialWin: winnings,
-              status: "cashed",
-              crashPoint,
-              winnings,
-            }),
-          ],
-          components: [makeCashoutButton(userId, true, "CASHED OUT")],
-        }).catch(() => null);
-
-        collector.stop("cashed");
-        cleanup();
       });
 
       collector.on("end", () => {
@@ -338,6 +338,7 @@ module.exports = {
         }
 
         clearInterval(countdownInterval);
+
         gameStarted = true;
         startTime = Date.now();
 
