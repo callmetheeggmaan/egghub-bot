@@ -35,15 +35,13 @@ function getMultiplier(elapsedMs) {
 function makeProgressBar(multiplier, crashPoint, status) {
   const blocks = 16;
   const ratio = Math.min(multiplier / Math.max(crashPoint, 2), 1);
-
   const filled = Math.max(1, Math.floor(ratio * blocks));
   const empty = blocks - filled;
 
-  let bar = "▰".repeat(filled) + "▱".repeat(empty);
+  const bar = "▰".repeat(filled) + "▱".repeat(empty);
 
   if (status === "crashed") return `💥 ${bar}`;
   if (status === "cashed") return `💰 ${bar}`;
-
   return `🚀 ${bar}`;
 }
 
@@ -69,7 +67,6 @@ function makeEmbed({
 }) {
   let color = 0xf1c40f;
   let title = "🚀 EGG CRASH";
-
   let mainDisplay = `**${multiplier.toFixed(2)}x**`;
 
   if (status === "playing") {
@@ -150,7 +147,12 @@ module.exports = {
 
     let gameInterval = null;
     let gameOver = false;
-    let multiplier = 1.0;
+    let collector = null;
+
+    function cleanup() {
+      if (gameInterval) clearInterval(gameInterval);
+      activeCrashGames.delete(userId);
+    }
 
     try {
       const result = await pool.query(
@@ -158,10 +160,11 @@ module.exports = {
         [userId]
       );
 
-      const currentEggs = result.rows[0]?.eggs || 0;
+      const currentEggs = Number(result.rows[0]?.eggs || 0);
 
       if (currentEggs < bet) {
-        activeCrashGames.delete(userId);
+        cleanup();
+
         return interaction.reply({
           content: `You only have ${currentEggs} Eggs.`,
           ephemeral: true,
@@ -169,8 +172,12 @@ module.exports = {
       }
 
       await pool.query(
-        "UPDATE users SET eggs = eggs - $1 WHERE discord_id = $2",
-        [bet, userId]
+        `
+        UPDATE users
+        SET eggs = eggs - $1, username = $2
+        WHERE discord_id = $3 AND eggs >= $1
+        `,
+        [bet, username, userId]
       );
 
       const crashPoint = randomCrashPoint();
@@ -181,7 +188,7 @@ module.exports = {
           makeEmbed({
             user: interaction.user,
             bet,
-            multiplier,
+            multiplier: 1.0,
             potentialWin: bet,
             status: "playing",
             crashPoint,
@@ -192,18 +199,33 @@ module.exports = {
 
       const message = await interaction.fetchReply();
 
-      const collector = message.createMessageComponentCollector({
-        time: MAX_GAME_TIME_MS,
+      collector = message.createMessageComponentCollector({
+        time: MAX_GAME_TIME_MS + 5000,
       });
 
       collector.on("collect", async i => {
-        if (i.user.id !== userId || gameOver) return;
+        if (!i.customId.startsWith("crash_cashout_")) return;
+
+        if (i.user.id !== userId) {
+          return i.reply({
+            content: "This is not your Crash game.",
+            ephemeral: true,
+          });
+        }
+
+        if (gameOver) {
+          return i.reply({
+            content: "This Crash game is already over.",
+            ephemeral: true,
+          });
+        }
 
         const elapsed = Date.now() - startTime;
         const cashMultiplier = getMultiplier(elapsed);
 
         if (cashMultiplier >= crashPoint) {
           gameOver = true;
+
           await i.update({
             embeds: [
               makeEmbed({
@@ -216,15 +238,22 @@ module.exports = {
               }),
             ],
             components: [makeCashoutButton(userId, true, "CRASHED")],
-          });
+          }).catch(() => null);
+
+          collector.stop("crashed");
+          cleanup();
           return;
         }
 
         const winnings = Math.floor(bet * cashMultiplier);
 
         await pool.query(
-          "UPDATE users SET eggs = eggs + $1 WHERE discord_id = $2",
-          [winnings, userId]
+          `
+          UPDATE users
+          SET eggs = eggs + $1, username = $2
+          WHERE discord_id = $3
+          `,
+          [winnings, username, userId]
         );
 
         gameOver = true;
@@ -242,18 +271,27 @@ module.exports = {
             }),
           ],
           components: [makeCashoutButton(userId, true, "CASHED OUT")],
-        });
+        }).catch(() => null);
+
+        collector.stop("cashed");
+        cleanup();
+      });
+
+      collector.on("end", () => {
+        cleanup();
       });
 
       gameInterval = setInterval(async () => {
-        if (gameOver) return clearInterval(gameInterval);
+        if (gameOver) {
+          cleanup();
+          return;
+        }
 
         const elapsed = Date.now() - startTime;
-        multiplier = getMultiplier(elapsed);
+        const multiplier = getMultiplier(elapsed);
 
         if (multiplier >= crashPoint) {
           gameOver = true;
-          clearInterval(gameInterval);
 
           await message.edit({
             embeds: [
@@ -267,8 +305,10 @@ module.exports = {
               }),
             ],
             components: [makeCashoutButton(userId, true, "CRASHED")],
-          });
+          }).catch(() => null);
 
+          if (collector) collector.stop("crashed");
+          cleanup();
           return;
         }
 
@@ -284,12 +324,24 @@ module.exports = {
             }),
           ],
           components: [makeCashoutButton(userId)],
-        });
+        }).catch(() => null);
       }, GAME_TICK_MS);
 
     } catch (err) {
-      console.error(err);
-      activeCrashGames.delete(userId);
+      console.error("Crash command error:", err);
+      cleanup();
+
+      if (interaction.replied || interaction.deferred) {
+        return interaction.followUp({
+          content: "Crash game failed.",
+          ephemeral: true,
+        }).catch(() => null);
+      }
+
+      return interaction.reply({
+        content: "Crash game failed.",
+        ephemeral: true,
+      }).catch(() => null);
     }
   },
 };
