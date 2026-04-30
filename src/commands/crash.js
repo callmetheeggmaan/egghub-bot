@@ -8,83 +8,132 @@ const {
 
 const pool = require("../db/pool");
 
+const activeCrashGames = new Set();
+
+const MIN_BET = 10;
+const MAX_BET = 1000;
+const GAME_TICK_MS = 1000;
+const MAX_GAME_TIME_MS = 30000;
+
 function randomCrashPoint() {
   const roll = Math.random();
 
-  if (roll < 0.45) return Number((1 + Math.random() * 0.7).toFixed(2)); // 1.00x - 1.70x
-  if (roll < 0.75) return Number((1.7 + Math.random() * 1.3).toFixed(2)); // 1.70x - 3.00x
-  if (roll < 0.92) return Number((3 + Math.random() * 3).toFixed(2)); // 3.00x - 6.00x
-  if (roll < 0.98) return Number((6 + Math.random() * 6).toFixed(2)); // 6.00x - 12.00x
+  if (roll < 0.08) return Number((1.0 + Math.random() * 0.25).toFixed(2));
+  if (roll < 0.45) return Number((1.25 + Math.random() * 0.75).toFixed(2));
+  if (roll < 0.75) return Number((2.0 + Math.random() * 1.5).toFixed(2));
+  if (roll < 0.92) return Number((3.5 + Math.random() * 3.5).toFixed(2));
+  if (roll < 0.98) return Number((7.0 + Math.random() * 8.0).toFixed(2));
 
-  return Number((12 + Math.random() * 13).toFixed(2)); // 12.00x - 25.00x
+  return Number((15.0 + Math.random() * 20.0).toFixed(2));
 }
 
-function makeProgressBar(multiplier, crashPoint, crashed = false) {
-  const maxBlocks = 12;
-  const progress = Math.min(Math.floor((multiplier / Math.max(crashPoint, 2)) * maxBlocks), maxBlocks);
+function getMultiplier(elapsedMs) {
+  const seconds = elapsedMs / 1000;
+  return Number((1 + seconds * 0.18 + Math.pow(seconds, 1.35) * 0.035).toFixed(2));
+}
 
-  let bar = "";
+function makeProgressBar(multiplier, crashPoint, status) {
+  const blocks = 14;
+  const ratio = Math.min(multiplier / Math.max(crashPoint, 2), 1);
+  const filled = Math.max(1, Math.floor(ratio * blocks));
+  const empty = blocks - filled;
 
-  for (let i = 0; i < maxBlocks; i++) {
-    if (i === progress && !crashed) {
-      bar += "🚀";
-    } else if (i < progress) {
-      bar += "━";
-    } else {
-      bar += "─";
-    }
+  if (status === "crashed") {
+    return `${"━".repeat(Math.max(0, filled - 1))}💥${"─".repeat(empty)}`;
   }
 
-  return crashed ? `${bar} 💥` : `${bar} 💰`;
+  if (status === "cashed") {
+    return `${"━".repeat(Math.max(0, filled - 1))}💰${"─".repeat(empty)}`;
+  }
+
+  return `${"━".repeat(Math.max(0, filled - 1))}🚀${"─".repeat(empty)} 💰`;
 }
 
-function makeEmbed({ user, bet, multiplier, potentialWin, crashPoint, status }) {
-  let colour = 0xf1c40f;
+function makeCashoutButton(userId, disabled = false, label = "CASH OUT") {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`crash_cashout_${userId}`)
+      .setLabel(label)
+      .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Success)
+      .setEmoji(disabled ? "✅" : "💰")
+      .setDisabled(disabled)
+  );
+}
+
+function makeEmbed({
+  user,
+  bet,
+  multiplier,
+  potentialWin,
+  status,
+  crashPoint,
+  winnings,
+}) {
+  let color = 0xf1c40f;
   let title = "🚀 EGG CRASH";
   let description = "Cash out before it crashes.";
 
   if (status === "cashed") {
-    colour = 0x2ecc71;
+    color = 0x2ecc71;
     title = "✅ CASHED OUT";
-    description = `${user} escaped before the crash.`;
+    description = `${user} escaped at **${multiplier.toFixed(2)}x**.`;
   }
 
   if (status === "crashed") {
-    colour = 0xe74c3c;
+    color = 0xe74c3c;
     title = "💥 CRASHED";
-    description = `${user} waited too long.`;
+    description = `${user} crashed at **${crashPoint.toFixed(2)}x**.`;
+  }
+
+  const fields = [
+    {
+      name: "🥚 Bet",
+      value: `${bet} Eggs`,
+      inline: true,
+    },
+    {
+      name: "📈 Multiplier",
+      value: `${multiplier.toFixed(2)}x`,
+      inline: true,
+    },
+    {
+      name: "💰 Potential Win",
+      value: `${potentialWin} Eggs`,
+      inline: true,
+    },
+    {
+      name: "🎮 Game",
+      value: makeProgressBar(multiplier, crashPoint, status),
+      inline: false,
+    },
+  ];
+
+  if (status === "cashed") {
+    fields.push({
+      name: "🏆 Result",
+      value: `Won **${winnings} Eggs**`,
+      inline: false,
+    });
+  }
+
+  if (status === "crashed") {
+    fields.push({
+      name: "❌ Result",
+      value: `Lost **${bet} Eggs**`,
+      inline: false,
+    });
   }
 
   return new EmbedBuilder()
-    .setColor(colour)
+    .setColor(color)
     .setTitle(title)
     .setDescription(description)
-    .addFields(
-      {
-        name: "🥚 Bet",
-        value: `${bet} Eggs`,
-        inline: true,
-      },
-      {
-        name: "📈 Multiplier",
-        value: `${multiplier.toFixed(2)}x`,
-        inline: true,
-      },
-      {
-        name: "💰 Potential Win",
-        value: `${potentialWin} Eggs`,
-        inline: true,
-      },
-      {
-        name: "🎮 Game",
-        value: makeProgressBar(multiplier, crashPoint, status === "crashed"),
-        inline: false,
-      }
-    )
+    .addFields(fields)
     .setFooter({
-      text: status === "playing"
-        ? "Press CASH OUT before it crashes."
-        : "EggHub Crash",
+      text:
+        status === "playing"
+          ? "Press CASH OUT before it crashes."
+          : "EggHub Crash",
     });
 }
 
@@ -104,82 +153,109 @@ module.exports = {
     const username = interaction.user.username;
     const bet = interaction.options.getInteger("bet");
 
-    if (bet < 10) {
+    if (activeCrashGames.has(userId)) {
       return interaction.reply({
-        content: "Minimum bet is 10 Eggs.",
+        content: "You already have a Crash game running.",
         ephemeral: true,
       });
     }
 
-    if (bet > 1000) {
+    if (bet < MIN_BET) {
       return interaction.reply({
-        content: "Maximum bet is 1000 Eggs.",
+        content: `Minimum bet is ${MIN_BET} Eggs.`,
         ephemeral: true,
       });
     }
+
+    if (bet > MAX_BET) {
+      return interaction.reply({
+        content: `Maximum bet is ${MAX_BET} Eggs.`,
+        ephemeral: true,
+      });
+    }
+
+    activeCrashGames.add(userId);
+
+    let gameInterval = null;
+    let gameTimeout = null;
+    let gameOver = false;
+    let cashedOut = false;
+    let crashed = false;
+    let multiplier = 1.0;
+    let latestMultiplier = 1.0;
+    let message = null;
 
     try {
-      const result = await pool.query(
+      const userResult = await pool.query(
         "SELECT eggs FROM users WHERE discord_id = $1",
         [userId]
       );
 
-      if (result.rows.length === 0) {
+      if (userResult.rows.length === 0) {
+        activeCrashGames.delete(userId);
+
         return interaction.reply({
           content: "You have no Eggs yet.",
           ephemeral: true,
         });
       }
 
-      const currentEggs = result.rows[0].eggs;
+      const currentEggs = Number(userResult.rows[0].eggs);
 
       if (currentEggs < bet) {
+        activeCrashGames.delete(userId);
+
         return interaction.reply({
           content: `You only have ${currentEggs} Eggs.`,
           ephemeral: true,
         });
       }
 
-      await pool.query(
-        "UPDATE users SET eggs = eggs - $1, username = $2 WHERE discord_id = $3",
+      const removeBetResult = await pool.query(
+        `
+        UPDATE users
+        SET eggs = eggs - $1, username = $2
+        WHERE discord_id = $3 AND eggs >= $1
+        RETURNING eggs
+        `,
         [bet, username, userId]
       );
 
-      let multiplier = 1.0;
-      let cashedOut = false;
-      let crashed = false;
+      if (removeBetResult.rows.length === 0) {
+        activeCrashGames.delete(userId);
+
+        return interaction.reply({
+          content: "You do not have enough Eggs for that bet.",
+          ephemeral: true,
+        });
+      }
 
       const crashPoint = randomCrashPoint();
-
-      const cashoutButton = new ButtonBuilder()
-        .setCustomId(`crash_cashout_${userId}`)
-        .setLabel("CASH OUT")
-        .setStyle(ButtonStyle.Success)
-        .setEmoji("💰");
-
-      const row = new ActionRowBuilder().addComponents(cashoutButton);
-
-      const startingEmbed = makeEmbed({
-        user: interaction.user,
-        bet,
-        multiplier,
-        potentialWin: bet,
-        crashPoint,
-        status: "playing",
-      });
+      const startedAt = Date.now();
 
       await interaction.reply({
-        embeds: [startingEmbed],
-        components: [row],
+        embeds: [
+          makeEmbed({
+            user: interaction.user,
+            bet,
+            multiplier,
+            potentialWin: bet,
+            status: "playing",
+            crashPoint,
+          }),
+        ],
+        components: [makeCashoutButton(userId)],
       });
 
-      const message = await interaction.fetchReply();
+      message = await interaction.fetchReply();
 
       const collector = message.createMessageComponentCollector({
-        time: 30000,
+        time: MAX_GAME_TIME_MS + 5000,
       });
 
       collector.on("collect", async buttonInteraction => {
+        if (!buttonInteraction.customId.startsWith("crash_cashout_")) return;
+
         if (buttonInteraction.user.id !== userId) {
           return buttonInteraction.reply({
             content: "This is not your Crash game.",
@@ -187,118 +263,176 @@ module.exports = {
           });
         }
 
-        if (cashedOut || crashed) {
+        if (gameOver || cashedOut || crashed) {
           return buttonInteraction.reply({
-            content: "This game is already over.",
+            content: "This Crash game is already over.",
             ephemeral: true,
           });
         }
 
-        cashedOut = true;
+        const elapsed = Date.now() - startedAt;
+        const cashoutMultiplier = getMultiplier(elapsed);
 
-        const winnings = Math.floor(bet * multiplier);
-
-        await pool.query(
-          "UPDATE users SET eggs = eggs + $1 WHERE discord_id = $2",
-          [winnings, userId]
-        );
-
-        const disabledButton = ButtonBuilder.from(cashoutButton)
-          .setDisabled(true)
-          .setLabel("CASHED OUT");
-
-        const disabledRow = new ActionRowBuilder().addComponents(disabledButton);
-
-        const cashedEmbed = makeEmbed({
-          user: interaction.user,
-          bet,
-          multiplier,
-          potentialWin: winnings,
-          crashPoint,
-          status: "cashed",
-        });
-
-        await buttonInteraction.update({
-          embeds: [cashedEmbed],
-          components: [disabledRow],
-        });
-
-        collector.stop("cashed");
-      });
-
-      const gameLoop = setInterval(async () => {
-        if (cashedOut || crashed) {
-          clearInterval(gameLoop);
-          return;
-        }
-
-        const growth = 0.08 + Math.random() * 0.22;
-        multiplier = Number((multiplier + growth).toFixed(2));
-
-        const potentialWin = Math.floor(bet * multiplier);
-
-        if (multiplier >= crashPoint) {
+        if (cashoutMultiplier >= crashPoint) {
           crashed = true;
-          clearInterval(gameLoop);
+          gameOver = true;
 
-          const disabledButton = ButtonBuilder.from(cashoutButton)
-            .setDisabled(true)
-            .setLabel("CRASHED");
+          clearInterval(gameInterval);
+          clearTimeout(gameTimeout);
 
-          const disabledRow = new ActionRowBuilder().addComponents(disabledButton);
-
-          const crashedEmbed = makeEmbed({
-            user: interaction.user,
-            bet,
-            multiplier: crashPoint,
-            potentialWin: 0,
-            crashPoint,
-            status: "crashed",
-          });
-
-          await message.edit({
-            embeds: [crashedEmbed],
-            components: [disabledRow],
+          await buttonInteraction.update({
+            embeds: [
+              makeEmbed({
+                user: interaction.user,
+                bet,
+                multiplier: crashPoint,
+                potentialWin: 0,
+                status: "crashed",
+                crashPoint,
+              }),
+            ],
+            components: [makeCashoutButton(userId, true, "CRASHED")],
           }).catch(() => null);
 
           collector.stop("crashed");
           return;
         }
 
-        const liveEmbed = makeEmbed({
-          user: interaction.user,
-          bet,
-          multiplier,
-          potentialWin,
-          crashPoint,
-          status: "playing",
-        });
+        cashedOut = true;
+        gameOver = true;
 
-        await message.edit({
-          embeds: [liveEmbed],
-          components: [row],
+        clearInterval(gameInterval);
+        clearTimeout(gameTimeout);
+
+        const winnings = Math.floor(bet * cashoutMultiplier);
+
+        await pool.query(
+          `
+          UPDATE users
+          SET eggs = eggs + $1, username = $2
+          WHERE discord_id = $3
+          `,
+          [winnings, username, userId]
+        );
+
+        await buttonInteraction.update({
+          embeds: [
+            makeEmbed({
+              user: interaction.user,
+              bet,
+              multiplier: cashoutMultiplier,
+              potentialWin: winnings,
+              status: "cashed",
+              crashPoint,
+              winnings,
+            }),
+          ],
+          components: [makeCashoutButton(userId, true, "CASHED OUT")],
         }).catch(() => null);
 
-      }, 1200);
-
-      collector.on("end", async () => {
-        clearInterval(gameLoop);
+        collector.stop("cashed");
       });
 
+      gameInterval = setInterval(async () => {
+        if (gameOver || cashedOut || crashed) {
+          clearInterval(gameInterval);
+          return;
+        }
+
+        const elapsed = Date.now() - startedAt;
+        multiplier = getMultiplier(elapsed);
+        latestMultiplier = multiplier;
+
+        if (multiplier >= crashPoint) {
+          crashed = true;
+          gameOver = true;
+
+          clearInterval(gameInterval);
+          clearTimeout(gameTimeout);
+
+          await message.edit({
+            embeds: [
+              makeEmbed({
+                user: interaction.user,
+                bet,
+                multiplier: crashPoint,
+                potentialWin: 0,
+                status: "crashed",
+                crashPoint,
+              }),
+            ],
+            components: [makeCashoutButton(userId, true, "CRASHED")],
+          }).catch(() => null);
+
+          collector.stop("crashed");
+          return;
+        }
+
+        const potentialWin = Math.floor(bet * multiplier);
+
+        await message.edit({
+          embeds: [
+            makeEmbed({
+              user: interaction.user,
+              bet,
+              multiplier,
+              potentialWin,
+              status: "playing",
+              crashPoint,
+            }),
+          ],
+          components: [makeCashoutButton(userId)],
+        }).catch(() => null);
+      }, GAME_TICK_MS);
+
+      gameTimeout = setTimeout(async () => {
+        if (gameOver || cashedOut || crashed) return;
+
+        crashed = true;
+        gameOver = true;
+
+        clearInterval(gameInterval);
+
+        await message.edit({
+          embeds: [
+            makeEmbed({
+              user: interaction.user,
+              bet,
+              multiplier: latestMultiplier,
+              potentialWin: 0,
+              status: "crashed",
+              crashPoint: latestMultiplier,
+            }),
+          ],
+          components: [makeCashoutButton(userId, true, "CRASHED")],
+        }).catch(() => null);
+
+        collector.stop("timeout");
+      }, MAX_GAME_TIME_MS);
+
+      collector.on("end", () => {
+        clearInterval(gameInterval);
+        clearTimeout(gameTimeout);
+        activeCrashGames.delete(userId);
+      });
     } catch (error) {
       console.error("Crash command error:", error);
+
+      clearInterval(gameInterval);
+      clearTimeout(gameTimeout);
+      activeCrashGames.delete(userId);
 
       if (interaction.replied || interaction.deferred) {
         return interaction.followUp({
           content: "Crash game failed.",
           ephemeral: true,
-        });
+        }).catch(() => null);
       }
 
       return interaction.reply({
         content: "Crash game failed.",
         ephemeral: true,
-      });
+      }).catch(() => null);
     }
   },
 };
