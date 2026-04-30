@@ -76,7 +76,6 @@ async function startLiveLeaderboard(client) {
 
       const newMessage = await channel.send(text);
       leaderboardMessageId = newMessage.id;
-
     } catch (error) {
       console.error("Live leaderboard update error:", error);
     }
