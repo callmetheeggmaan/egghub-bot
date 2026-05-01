@@ -15,14 +15,14 @@ const activeSlots = new Set();
 const SYMBOLS = ["🍒", "🍋", "🍊", "🍇", "🔔", "⭐", "💎", "🥚"];
 
 const PAYOUTS = {
-  "💎": 12,
-  "🥚": 8,
-  "⭐": 6,
-  "🔔": 5,
-  "🍇": 4,
-  "🍊": 3,
-  "🍋": 2,
-  "🍒": 2,
+  "💎": 50,
+  "🥚": 25,
+  "⭐": 15,
+  "🔔": 10,
+  "🍇": 8,
+  "🍊": 6,
+  "🍋": 4,
+  "🍒": 3,
 };
 
 function wait(ms) {
@@ -54,9 +54,9 @@ function calculateResult(line, bet) {
 
   if (a === b || b === c || a === c) {
     return {
-      win: Math.floor(bet * 1.5),
+      win: Math.floor(bet * 2),
       type: "smallwin",
-      label: "✨ TWO MATCHED x1.5",
+      label: "✨ TWO MATCHED x2",
     };
   }
 
