@@ -37,42 +37,18 @@ function spinLine() {
   return [randomSymbol(), randomSymbol(), randomSymbol()];
 }
 
-function buildMachine(line) {
-  return (
-    `╔══════════════╗\n` +
-    `║   🎰 EGGHUB   ║\n` +
-    `╠══════════════╣\n` +
-    `║  ${line[0]}  |  ${line[1]}  |  ${line[2]}  ║\n` +
-    `╚══════════════╝`
-  );
-}
-
 function calculateResult(line, bet) {
   const [a, b, c] = line;
 
   if (a === b && b === c) {
     const multiplier = PAYOUTS[a] || 2;
 
-    if (a === "💎") {
-      return {
-        win: bet * multiplier,
-        type: "jackpot",
-        label: `💎 DIAMOND JACKPOT x${multiplier}`,
-      };
-    }
-
-    if (a === "🥚") {
-      return {
-        win: bet * multiplier,
-        type: "eggpot",
-        label: `🥚 EGG JACKPOT x${multiplier}`,
-      };
-    }
-
     return {
       win: bet * multiplier,
-      type: "bigwin",
-      label: `${a} THREE OF A KIND x${multiplier}`,
+      type: a === "💎" ? "jackpot" : "bigwin",
+      label: a === "💎"
+        ? `💎 DIAMOND JACKPOT x${multiplier}`
+        : `${a} THREE OF A KIND x${multiplier}`,
     };
   }
 
@@ -121,14 +97,7 @@ function makeButtons(userId, state) {
   ];
 }
 
-function buildEmbed({
-  line,
-  bet,
-  win,
-  status,
-  label,
-  balance,
-}) {
+function buildEmbed({ line, bet, win, status, label, balance }) {
   let color = 0xf1c40f;
   let title = "🎰 EGGHUB SLOTS";
   let resultText = label || "Pulling the lever...";
@@ -154,20 +123,13 @@ function buildEmbed({
     title = "🔥 BIG WIN";
   }
 
-  if (status === "eggpot") {
-    color = 0xf1c40f;
-    title = "🥚 EGG JACKPOT";
-  }
-
   if (status === "jackpot") {
     color = 0x00ffff;
     title = "💎 JACKPOT";
   }
 
   let description =
-    "```txt\n" +
-    buildMachine(line) +
-    "\n```\n" +
+    `## ${line[0]}  |  ${line[1]}  |  ${line[2]}\n\n` +
     `**${resultText}**\n\n` +
     `🥚 **Bet:** ${bet} Eggs\n` +
     `💰 **Win:** ${win} Eggs`;
