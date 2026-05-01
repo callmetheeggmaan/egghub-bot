@@ -31,19 +31,8 @@ function createBoard() {
 
 function getMultiplier(safePicks) {
   const multipliers = [
-    1.0,
-    1.25,
-    1.6,
-    2.1,
-    2.8,
-    3.8,
-    5.0,
-    6.5,
-    8.5,
-    11.0,
-    14.0,
-    18.0,
-    24.0,
+    1.0, 1.25, 1.6, 2.1, 2.8, 3.8, 5.0, 6.5, 8.5,
+    11.0, 14.0, 18.0, 24.0,
   ];
 
   return multipliers[Math.min(safePicks, multipliers.length - 1)];
@@ -67,7 +56,6 @@ function renderGrid(board, revealed, gameOver = false) {
 }
 
 function makeEmbed({
-  user,
   board,
   revealed,
   bet,
@@ -117,7 +105,7 @@ function makeEmbed({
     .setFooter({ text: "Chicken Run: eggs are safe, foxes end the game." });
 }
 
-function makeButtons(userId, revealed, ended = false) {
+function makeButtons(userId, board, revealed, ended = false) {
   const rows = [];
 
   for (let row = 0; row < 4; row++) {
@@ -127,11 +115,24 @@ function makeButtons(userId, revealed, ended = false) {
       const index = row * 4 + col;
       const isRevealed = revealed.has(index);
 
+      let label = "?";
+      let style = ButtonStyle.Secondary;
+
+      if (isRevealed || ended) {
+        if (board[index] === "fox") {
+          label = "🦊";
+          style = ButtonStyle.Danger;
+        } else {
+          label = "🥚";
+          style = ButtonStyle.Success;
+        }
+      }
+
       actionRow.addComponents(
         new ButtonBuilder()
           .setCustomId(`chicken_tile_${userId}_${index}`)
-          .setLabel(isRevealed ? "🥚" : "?")
-          .setStyle(isRevealed ? ButtonStyle.Success : ButtonStyle.Secondary)
+          .setLabel(label)
+          .setStyle(style)
           .setDisabled(ended || isRevealed)
       );
     }
@@ -284,7 +285,6 @@ module.exports = {
         content: null,
         embeds: [
           makeEmbed({
-            user: interaction.user,
             board,
             revealed,
             bet,
@@ -293,7 +293,7 @@ module.exports = {
             balance: balanceAfterBet,
           }),
         ],
-        components: makeButtons(userId, revealed, false),
+        components: makeButtons(userId, board, revealed, false),
       }).catch(() => null);
     }
 
@@ -323,7 +323,6 @@ module.exports = {
       await interaction.reply({
         embeds: [
           makeEmbed({
-            user: interaction.user,
             board,
             revealed,
             bet,
@@ -332,7 +331,7 @@ module.exports = {
             balance: balanceAfterBet,
           }),
         ],
-        components: makeButtons(userId, revealed, false),
+        components: makeButtons(userId, board, revealed, false),
       });
 
       message = await interaction.fetchReply();
@@ -385,7 +384,6 @@ module.exports = {
             await message.edit({
               embeds: [
                 makeEmbed({
-                  user: interaction.user,
                   board,
                   revealed,
                   bet,
@@ -394,7 +392,7 @@ module.exports = {
                   balance,
                 }),
               ],
-              components: makeButtons(userId, revealed, true),
+              components: makeButtons(userId, board, revealed, true),
             }).catch(() => null);
 
             return;
@@ -415,7 +413,6 @@ module.exports = {
               await message.edit({
                 embeds: [
                   makeEmbed({
-                    user: interaction.user,
                     board,
                     revealed,
                     bet,
@@ -424,7 +421,7 @@ module.exports = {
                     balance,
                   }),
                 ],
-                components: makeButtons(userId, revealed, true),
+                components: makeButtons(userId, board, revealed, true),
               }).catch(() => null);
 
               return;
@@ -437,7 +434,6 @@ module.exports = {
             await message.edit({
               embeds: [
                 makeEmbed({
-                  user: interaction.user,
                   board,
                   revealed,
                   bet,
@@ -446,7 +442,7 @@ module.exports = {
                   balance,
                 }),
               ],
-              components: makeButtons(userId, revealed, false),
+              components: makeButtons(userId, board, revealed, false),
             }).catch(() => null);
           }
         } catch (err) {
