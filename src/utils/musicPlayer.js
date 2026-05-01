@@ -29,6 +29,19 @@ function getQueue(guildId) {
   return queues.get(guildId);
 }
 
+function formatDuration(seconds) {
+  const totalSeconds = Number(seconds);
+
+  if (!totalSeconds || Number.isNaN(totalSeconds)) {
+    return "Unknown";
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+
+  return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
 async function resolveSong(query) {
   if (ytdl.validateURL(query)) {
     const info = await ytdl.getInfo(query);
@@ -36,9 +49,7 @@ async function resolveSong(query) {
     return {
       title: info.videoDetails.title,
       url: info.videoDetails.video_url,
-      duration: info.videoDetails.lengthSeconds
-        ? `${Math.floor(info.videoDetails.lengthSeconds / 60)}:${String(info.videoDetails.lengthSeconds % 60).padStart(2, "0")}`
-        : "Unknown",
+      duration: formatDuration(info.videoDetails.lengthSeconds),
     };
   }
 
@@ -66,7 +77,9 @@ async function playNext(guildId) {
     queue.playing = false;
 
     setTimeout(() => {
-      const latestQueue = getQueue(guildId);
+      const latestQueue = queues.get(guildId);
+
+      if (!latestQueue) return;
 
       if (!latestQueue.playing && latestQueue.connection) {
         latestQueue.connection.destroy();
@@ -117,11 +130,33 @@ async function playNext(guildId) {
 }
 
 async function addSong(interaction, query) {
-  const member = interaction.member;
+  const guild = interaction.guild;
+
+  if (!guild) {
+    return { error: "This command can only be used inside a server." };
+  }
+
+  let member;
+
+  try {
+    member = await guild.members.fetch(interaction.user.id);
+  } catch (err) {
+    console.error("Failed to fetch guild member:", err);
+    return { error: "I could not check your voice channel. Try again." };
+  }
+
   const voiceChannel = member.voice.channel;
 
   if (!voiceChannel) {
     return { error: "You need to join a voice channel first." };
+  }
+
+  const permissions = voiceChannel.permissionsFor(guild.members.me);
+
+  if (!permissions || !permissions.has("Connect") || !permissions.has("Speak")) {
+    return {
+      error: "I need permission to Connect and Speak in your voice channel.",
+    };
   }
 
   const song = await resolveSong(query);
@@ -130,7 +165,7 @@ async function addSong(interaction, query) {
     return { error: song.error };
   }
 
-  const queue = getQueue(interaction.guild.id);
+  const queue = getQueue(guild.id);
 
   queue.textChannel = interaction.channel;
   queue.voiceChannel = voiceChannel;
@@ -138,39 +173,52 @@ async function addSong(interaction, query) {
   if (!queue.connection) {
     queue.connection = joinVoiceChannel({
       channelId: voiceChannel.id,
-      guildId: interaction.guild.id,
-      adapterCreator: interaction.guild.voiceAdapterCreator,
+      guildId: guild.id,
+      adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: false,
     });
+
+    try {
+      await entersState(queue.connection, VoiceConnectionStatus.Ready, 15_000);
+    } catch (err) {
+      console.error("Voice connection failed:", err);
+
+      queue.connection.destroy();
+      queues.delete(guild.id);
+
+      return {
+        error: "I could not connect to your voice channel.",
+      };
+    }
 
     queue.connection.subscribe(queue.player);
 
     queue.connection.on(VoiceConnectionStatus.Disconnected, async () => {
       try {
         await Promise.race([
-          entersState(queue.connection, VoiceConnectionStatus.Signalling, 5000),
-          entersState(queue.connection, VoiceConnectionStatus.Connecting, 5000),
+          entersState(queue.connection, VoiceConnectionStatus.Signalling, 5_000),
+          entersState(queue.connection, VoiceConnectionStatus.Connecting, 5_000),
         ]);
       } catch {
         if (queue.connection) queue.connection.destroy();
-        queues.delete(interaction.guild.id);
+        queues.delete(guild.id);
       }
     });
 
     queue.player.on(AudioPlayerStatus.Idle, () => {
-      playNext(interaction.guild.id);
+      playNext(guild.id);
     });
 
     queue.player.on("error", error => {
       console.error("Audio player error:", error);
-      playNext(interaction.guild.id);
+      playNext(guild.id);
     });
   }
 
   queue.songs.push(song);
 
   if (!queue.playing && !queue.current) {
-    playNext(interaction.guild.id);
+    playNext(guild.id);
   }
 
   return {
@@ -180,9 +228,9 @@ async function addSong(interaction, query) {
 }
 
 function skipSong(guildId) {
-  const queue = getQueue(guildId);
+  const queue = queues.get(guildId);
 
-  if (!queue.connection || !queue.current) {
+  if (!queue || !queue.connection || !queue.current) {
     return { error: "Nothing is currently playing." };
   }
 
@@ -191,9 +239,9 @@ function skipSong(guildId) {
 }
 
 function stopMusic(guildId) {
-  const queue = getQueue(guildId);
+  const queue = queues.get(guildId);
 
-  if (!queue.connection) {
+  if (!queue || !queue.connection) {
     return { error: "Music is not currently playing." };
   }
 
@@ -213,7 +261,15 @@ function stopMusic(guildId) {
 }
 
 function getQueueInfo(guildId) {
-  const queue = getQueue(guildId);
+  const queue = queues.get(guildId);
+
+  if (!queue) {
+    return {
+      current: null,
+      songs: [],
+      playing: false,
+    };
+  }
 
   return {
     current: queue.current,
