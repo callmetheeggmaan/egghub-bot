@@ -11,59 +11,95 @@ const {
 const pool = require("../db/pool");
 const { SHOP_ITEMS } = require("../shop/shopItems");
 
-function formatItemLine(item) {
-  return `${item.emoji} **${item.name}**\n${item.description}\nPrice: **${item.price.toLocaleString()} Eggs**`;
-}
+const COLORS = {
+  Common: 0x9ca3af,
+  Rare: 0x3b82f6,
+  Epic: 0xa855f7,
+  Legendary: 0xfacc15
+};
 
 function getCategoryItems(category) {
   if (category === "all") return SHOP_ITEMS;
   return SHOP_ITEMS.filter((item) => item.category === category);
 }
 
-function buildShopEmbed(category = "all") {
-  const categoryItems = getCategoryItems(category);
+function rarityBar(rarity) {
+  if (rarity === "Legendary") return "🟨🟨🟨🟨🟨";
+  if (rarity === "Epic") return "🟪🟪🟪🟪⬛";
+  if (rarity === "Rare") return "🟦🟦🟦⬛⬛";
+  return "⬜⬜⬛⬛⬛";
+}
 
-  return new EmbedBuilder()
-    .setTitle("🥚 EggHub Shop")
+function buildShopEmbed(category = "all") {
+  const items = getCategoryItems(category);
+
+  const categoryName = {
+    all: "All Items",
+    boosts: "Boosts",
+    cases: "Loot Cases",
+    roles: "Cosmetic Roles"
+  }[category];
+
+  const embed = new EmbedBuilder()
+    .setTitle("🥚 EggHub Premium Shop")
     .setDescription(
-      categoryItems.length
-        ? categoryItems.map(formatItemLine).join("\n\n")
-        : "No items found in this category."
+      [
+        `**Category:** ${categoryName}`,
+        "",
+        "Spend your Eggs on boosts, loot cases, and cosmetic rewards.",
+        "Use the dropdown to switch sections, then press a buy button."
+      ].join("\n")
     )
     .setColor(0xffd700)
-    .setFooter({
-      text: "Use the menu to change category. Use buttons to buy items."
+    .setThumbnail("https://cdn-icons-png.flaticon.com/512/2713/2713476.png")
+    .setFooter({ text: "EggHub Shop • Items are bought using Eggs" });
+
+  for (const item of items.slice(0, 6)) {
+    embed.addFields({
+      name: `${item.emoji} ${item.name} — ${item.price.toLocaleString()} Eggs`,
+      value: [
+        item.description,
+        `Rarity: **${item.rarity}** ${rarityBar(item.rarity)}`
+      ].join("\n"),
+      inline: false
     });
+  }
+
+  return embed;
 }
 
 function buildCategoryRow(selected = "all") {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("shop_category")
-      .setPlaceholder("Choose a shop category")
+      .setPlaceholder("Choose shop category")
       .addOptions([
         {
           label: "All Items",
           value: "all",
           emoji: "🛒",
+          description: "View everything",
           default: selected === "all"
         },
         {
           label: "Boosts",
           value: "boosts",
           emoji: "⚡",
+          description: "Egg multipliers and luck boosts",
           default: selected === "boosts"
         },
         {
-          label: "Loot Boxes",
+          label: "Loot Cases",
           value: "cases",
           emoji: "📦",
+          description: "Cases with random rewards",
           default: selected === "cases"
         },
         {
-          label: "Roles",
+          label: "Cosmetic Roles",
           value: "roles",
           emoji: "🎭",
+          description: "Buyable Discord roles",
           default: selected === "roles"
         }
       ])
@@ -72,16 +108,21 @@ function buildCategoryRow(selected = "all") {
 
 function buildBuyRows(category = "all") {
   const items = getCategoryItems(category).slice(0, 5);
-
   const row = new ActionRowBuilder();
 
   for (const item of items) {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`shop_buy_${item.id}`)
-        .setLabel(`Buy ${item.name}`)
+        .setLabel(`${item.price.toLocaleString()}`)
         .setEmoji(item.emoji)
-        .setStyle(ButtonStyle.Success)
+        .setStyle(
+          item.rarity === "Legendary"
+            ? ButtonStyle.Danger
+            : item.rarity === "Epic"
+              ? ButtonStyle.Primary
+              : ButtonStyle.Success
+        )
     );
   }
 
@@ -169,7 +210,6 @@ async function giveRole(interaction, item) {
 async function handlePurchase(interaction, item) {
   const discordId = interaction.user.id;
   const username = interaction.user.username;
-
   const eggs = await getUserEggs(discordId, username);
 
   if (eggs < item.price) {
@@ -196,8 +236,20 @@ async function handlePurchase(interaction, item) {
 
   await logPurchase(discordId, item);
 
+  const successEmbed = new EmbedBuilder()
+    .setTitle("✅ Purchase Complete")
+    .setDescription(
+      [
+        `You bought ${item.emoji} **${item.name}**`,
+        "",
+        `Price: **${item.price.toLocaleString()} Eggs**`,
+        `Rarity: **${item.rarity}**`
+      ].join("\n")
+    )
+    .setColor(COLORS[item.rarity] || 0xffd700);
+
   return interaction.reply({
-    content: `✅ You bought ${item.emoji} **${item.name}** for **${item.price.toLocaleString()} Eggs**.`,
+    embeds: [successEmbed],
     ephemeral: true
   });
 }
@@ -221,12 +273,12 @@ module.exports = {
 
     const selectCollector = message.createMessageComponentCollector({
       componentType: ComponentType.StringSelect,
-      time: 120000
+      time: 180000
     });
 
     const buttonCollector = message.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 120000
+      time: 180000
     });
 
     selectCollector.on("collect", async (selectInteraction) => {
@@ -271,9 +323,7 @@ module.exports = {
       } catch (error) {
         console.error("Shop purchase error:", error);
 
-        if (buttonInteraction.replied || buttonInteraction.deferred) {
-          return;
-        }
+        if (buttonInteraction.replied || buttonInteraction.deferred) return;
 
         return buttonInteraction.reply({
           content: `❌ Purchase failed: ${error.message}`,
@@ -284,9 +334,7 @@ module.exports = {
 
     selectCollector.on("end", async () => {
       try {
-        await interaction.editReply({
-          components: []
-        });
+        await interaction.editReply({ components: [] });
       } catch (error) {
         console.error("Failed to disable shop menu:", error);
       }
