@@ -8,6 +8,7 @@ const {
 } = require("discord.js");
 
 const pool = require("../db/pool");
+const { getLuckMultiplier } = require("../utils/boosts");
 
 const COLORS = {
   Common: 0x9ca3af,
@@ -31,6 +32,7 @@ const CASES = {
       { type: "role", name: "Egg Hunter Role", emoji: "🏹", roleName: "Egg Hunter", chance: 5, rarity: "Epic" }
     ]
   },
+
   golden_egg_case: {
     name: "Golden Egg Case",
     emoji: "💰",
@@ -64,19 +66,38 @@ function rarityGlow(rarity) {
   return "⬜⬜⬛⬛⬛";
 }
 
-function rollReward(caseId) {
+function rollReward(caseId, luck = 1) {
   const caseData = CASES[caseId];
   const rewards = caseData.rewards;
-  const roll = Math.random() * 100;
+
+  const adjustedRewards = rewards.map((reward) => {
+    let adjustedChance = reward.chance;
+
+    if (reward.rarity === "Rare") adjustedChance *= luck;
+    if (reward.rarity === "Epic") adjustedChance *= luck;
+    if (reward.rarity === "Legendary") adjustedChance *= luck;
+
+    return {
+      ...reward,
+      adjustedChance
+    };
+  });
+
+  const totalChance = adjustedRewards.reduce(
+    (total, reward) => total + reward.adjustedChance,
+    0
+  );
+
+  const roll = Math.random() * totalChance;
 
   let cumulative = 0;
 
-  for (const reward of rewards) {
-    cumulative += reward.chance;
+  for (const reward of adjustedRewards) {
+    cumulative += reward.adjustedChance;
     if (roll <= cumulative) return reward;
   }
 
-  return rewards[0];
+  return adjustedRewards[0];
 }
 
 function getRandomReward(caseId) {
@@ -87,9 +108,9 @@ function getRandomReward(caseId) {
 function buildCaseSelectEmbed(cases) {
   const embed = new EmbedBuilder()
     .setTitle("📦 EggHub Case Vault")
-    .setDescription("Choose a case below and open it with a smooth animated reveal.")
+    .setDescription("Choose a case below and open it with an animated reward reveal.")
     .setColor(0xffd700)
-    .setFooter({ text: "EggHub Cases • Rewards are random" });
+    .setFooter({ text: "EggHub Cases • Luck boosts improve rare reward chances" });
 
   for (const item of cases) {
     embed.addFields({
@@ -112,7 +133,8 @@ function buildOpeningEmbed(caseData, spinReward, step, total) {
         progressBar(step, total),
         "",
         `Current item: ${spinReward.emoji} **${spinReward.name}**`,
-        `Rarity: **${spinReward.rarity}** ${rarityGlow(spinReward.rarity)}`
+        `Rarity: **${spinReward.rarity}**`,
+        rarityGlow(spinReward.rarity)
       ].join("\n")
     )
     .setColor(COLORS[spinReward.rarity] || caseData.color);
@@ -135,6 +157,32 @@ function buildWinEmbed(caseData, reward) {
     .setFooter({ text: "EggHub Cases • Reward added to your account" });
 }
 
+function buildOpenAgainRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId("open_again")
+      .setLabel("Open Another Case")
+      .setEmoji("📦")
+      .setStyle(ButtonStyle.Success)
+  );
+}
+
+function buildCaseButtons(cases) {
+  const row = new ActionRowBuilder();
+
+  for (const item of cases.slice(0, 5)) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`open_${item.item_id}`)
+        .setLabel(`${item.item_name} x${item.quantity}`)
+        .setEmoji("📦")
+        .setStyle(item.item_id === "golden_egg_case" ? ButtonStyle.Danger : ButtonStyle.Primary)
+    );
+  }
+
+  return [row];
+}
+
 async function getInventory(discordId) {
   const result = await pool.query(
     "SELECT * FROM user_inventory WHERE discord_id = $1",
@@ -150,7 +198,8 @@ async function removeItem(discordId, itemId) {
     UPDATE user_inventory
     SET quantity = quantity - 1,
         updated_at = NOW()
-    WHERE discord_id = $1 AND item_id = $2
+    WHERE discord_id = $1
+    AND item_id = $2
     `,
     [discordId, itemId]
   );
@@ -158,7 +207,9 @@ async function removeItem(discordId, itemId) {
   await pool.query(
     `
     DELETE FROM user_inventory
-    WHERE discord_id = $1 AND item_id = $2 AND quantity <= 0
+    WHERE discord_id = $1
+    AND item_id = $2
+    AND quantity <= 0
     `,
     [discordId, itemId]
   );
@@ -229,20 +280,80 @@ async function applyReward(interaction, reward) {
   }
 }
 
-function buildCaseButtons(cases) {
-  const row = new ActionRowBuilder();
+async function showCaseMenu(interaction, discordId) {
+  const inventory = await getInventory(discordId);
+  const cases = inventory.filter(
+    (item) => item.item_type === "case" && CASES[item.item_id] && item.quantity > 0
+  );
 
-  for (const item of cases.slice(0, 5)) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setCustomId(`open_${item.item_id}`)
-        .setLabel(`${item.item_name} x${item.quantity}`)
-        .setEmoji("📦")
-        .setStyle(item.item_id === "golden_egg_case" ? ButtonStyle.Danger : ButtonStyle.Primary)
-    );
+  if (cases.length === 0) {
+    await interaction.editReply({
+      content: "❌ You have no cases to open. Buy one from `/shop` first.",
+      embeds: [],
+      components: []
+    });
+    return false;
   }
 
-  return [row];
+  await interaction.editReply({
+    content: "",
+    embeds: [buildCaseSelectEmbed(cases)],
+    components: buildCaseButtons(cases)
+  });
+
+  return true;
+}
+
+async function openCase(interaction, buttonInteraction, caseId) {
+  const discordId = interaction.user.id;
+  const caseData = CASES[caseId];
+
+  const checkInventory = await getInventory(discordId);
+  const ownedCase = checkInventory.find(
+    (item) => item.item_id === caseId && item.quantity > 0
+  );
+
+  if (!ownedCase) {
+    return buttonInteraction.reply({
+      content: "❌ You do not have this case anymore.",
+      ephemeral: true
+    });
+  }
+
+  await buttonInteraction.update({
+    embeds: [
+      new EmbedBuilder()
+        .setTitle(`${caseData.emoji} Case Locked In`)
+        .setDescription("Preparing your reward roll...")
+        .setColor(caseData.color)
+    ],
+    components: []
+  });
+
+  const luck = await getLuckMultiplier(discordId);
+  const finalReward = rollReward(caseId, luck);
+  const totalSteps = 14;
+
+  for (let step = 1; step <= totalSteps; step++) {
+    const spinReward = step === totalSteps ? finalReward : getRandomReward(caseId);
+
+    await sleep(step < 8 ? 220 : step < 12 ? 420 : 700);
+
+    await interaction.editReply({
+      embeds: [buildOpeningEmbed(caseData, spinReward, step, totalSteps)],
+      components: []
+    });
+  }
+
+  await removeItem(discordId, caseId);
+  await applyReward(interaction, finalReward);
+
+  await sleep(700);
+
+  await interaction.editReply({
+    embeds: [buildWinEmbed(caseData, finalReward)],
+    components: [buildOpenAgainRow()]
+  });
 }
 
 module.exports = {
@@ -253,25 +364,20 @@ module.exports = {
   async execute(interaction) {
     const discordId = interaction.user.id;
 
-    const inventory = await getInventory(discordId);
-    const cases = inventory.filter((item) => item.item_type === "case" && CASES[item.item_id]);
-
-    if (cases.length === 0) {
-      return interaction.reply({
-        content: "❌ You have no cases to open. Buy one from `/shop` first.",
-        ephemeral: true
-      });
-    }
-
-    const message = await interaction.reply({
-      embeds: [buildCaseSelectEmbed(cases)],
-      components: buildCaseButtons(cases),
+    await interaction.reply({
+      content: "📦 Loading your case vault...",
       fetchReply: true
     });
 
+    const hasCases = await showCaseMenu(interaction, discordId);
+
+    if (!hasCases) return;
+
+    const message = await interaction.fetchReply();
+
     const collector = message.createMessageComponentCollector({
       componentType: ComponentType.Button,
-      time: 90000
+      time: 180000
     });
 
     collector.on("collect", async (buttonInteraction) => {
@@ -282,74 +388,47 @@ module.exports = {
         });
       }
 
-      const caseId = buttonInteraction.customId.replace("open_", "");
-      const caseData = CASES[caseId];
+      if (buttonInteraction.customId === "open_again") {
+        await buttonInteraction.deferUpdate();
+        return showCaseMenu(interaction, discordId);
+      }
 
-      if (!caseData) {
+      const caseId = buttonInteraction.customId.replace("open_", "");
+
+      if (!CASES[caseId]) {
         return buttonInteraction.reply({
           content: "❌ This case no longer exists.",
           ephemeral: true
         });
       }
 
-      const checkInventory = await getInventory(discordId);
-      const ownedCase = checkInventory.find(
-        (item) => item.item_id === caseId && item.quantity > 0
-      );
+      try {
+        await openCase(interaction, buttonInteraction, caseId);
+      } catch (error) {
+        console.error("Open case error:", error);
 
-      if (!ownedCase) {
-        return buttonInteraction.reply({
-          content: "❌ You do not have this case anymore.",
-          ephemeral: true
-        });
-      }
+        if (!buttonInteraction.replied && !buttonInteraction.deferred) {
+          return buttonInteraction.reply({
+            content: `❌ Case opening failed: ${error.message}`,
+            ephemeral: true
+          });
+        }
 
-      await buttonInteraction.update({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`${caseData.emoji} Case Locked In`)
-            .setDescription("Preparing your reward roll...")
-            .setColor(caseData.color)
-        ],
-        components: []
-      });
-
-      const finalReward = rollReward(caseId);
-      const totalSteps = 12;
-
-      for (let step = 1; step <= totalSteps; step++) {
-        const spinReward = step === totalSteps ? finalReward : getRandomReward(caseId);
-
-        await sleep(step < 8 ? 250 : step < 11 ? 450 : 700);
-
-        await interaction.editReply({
-          embeds: [buildOpeningEmbed(caseData, spinReward, step, totalSteps)],
+        return interaction.editReply({
+          content: `❌ Case opening failed: ${error.message}`,
+          embeds: [],
           components: []
         });
       }
-
-      await removeItem(discordId, caseId);
-      await applyReward(interaction, finalReward);
-
-      await sleep(700);
-
-      await interaction.editReply({
-        embeds: [buildWinEmbed(caseData, finalReward)],
-        components: []
-      });
-
-      collector.stop();
     });
 
-    collector.on("end", async (_, reason) => {
-      if (reason === "time") {
-        try {
-          await interaction.editReply({
-            components: []
-          });
-        } catch (error) {
-          console.error("Failed to disable open menu:", error);
-        }
+    collector.on("end", async () => {
+      try {
+        await interaction.editReply({
+          components: []
+        });
+      } catch (error) {
+        console.error("Failed to disable open menu:", error);
       }
     });
   }
