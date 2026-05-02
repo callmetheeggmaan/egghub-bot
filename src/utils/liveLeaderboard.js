@@ -1,4 +1,5 @@
 const pool = require("../db/pool");
+const { formatCurrency } = require("../config/currency");
 
 let leaderboardMessageId = null;
 let secondsUntilUpdate = 60;
@@ -12,14 +13,13 @@ function buildProgressBar(secondsLeft) {
   const filledBlocks = Math.ceil(progress * totalBlocks);
   const emptyBlocks = totalBlocks - filledBlocks;
 
-  let barColor = "🟩"; // green default
+  let barColor = "🟩";
 
-  if (progress <= 0.5) barColor = "🟨"; // mid = yellow
-  if (progress <= 0.2) barColor = "🟥"; // low = red
+  if (progress <= 0.5) barColor = "🟨";
+  if (progress <= 0.2) barColor = "🟥";
 
   let bar = barColor.repeat(filledBlocks) + "⬛".repeat(emptyBlocks);
 
-  // Flash effect last 10 seconds
   if (secondsLeft <= 10) {
     bar = (secondsLeft % 4 === 0 ? "⚠️ " : "") + bar;
   }
@@ -32,10 +32,10 @@ async function buildLeaderboardText() {
     "SELECT username, eggs FROM users ORDER BY eggs DESC LIMIT 10"
   );
 
-  let text = "🏆 **LIVE EGGHUB LEADERBOARD** 🏆\n\n";
+  let text = "🎰 **LIVE EGGHUB CASINO LEADERBOARD** 🎰\n\n";
 
   if (result.rows.length === 0) {
-    text += "No users found yet.";
+    text += "No players found yet.";
   } else {
     result.rows.forEach((user, index) => {
       const place =
@@ -44,15 +44,15 @@ async function buildLeaderboardText() {
         index === 2 ? "🥉" :
         `**${index + 1}.**`;
 
-      text += `${place} **${user.username}** — 🥚 ${user.eggs}\n`;
+      text += `${place} **${user.username}** — ${formatCurrency(user.eggs)}\n`;
     });
   }
 
   text += "\n⏱️ Updates automatically every 60 seconds.";
   text += `\n⏳ Next update in **${secondsUntilUpdate} seconds**.`;
   text += `\n${buildProgressBar(secondsUntilUpdate)}`;
-  text += "\n💬 Stay active to climb the leaderboard.";
-  text += "\n🎁 Top players may win prizes.";
+  text += "\n💬 Stay active to climb the casino board.";
+  text += "\n🎁 Top players may win bonus drops and prizes.";
 
   return text;
 }
@@ -91,9 +91,9 @@ async function startLiveLeaderboard(client) {
 
       const messages = await channel.messages.fetch({ limit: 20 });
 
-      const existingLeaderboard = messages.find(msg =>
+      const existingLeaderboard = messages.find((msg) =>
         msg.author.id === client.user.id &&
-        msg.content.includes("LIVE EGGHUB LEADERBOARD")
+        msg.content.includes("LIVE EGGHUB CASINO LEADERBOARD")
       );
 
       if (existingLeaderboard) {
@@ -139,7 +139,7 @@ async function startLiveLeaderboard(client) {
     await updateTimerOnly();
   }, TIMER_TICK_SECONDS * 1000);
 
-  console.log("Live leaderboard started.");
+  console.log("Live casino leaderboard started.");
 }
 
 module.exports = startLiveLeaderboard;

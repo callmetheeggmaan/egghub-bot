@@ -7,6 +7,7 @@ const {
 } = require("discord.js");
 
 const pool = require("../db/pool");
+const { formatCurrency } = require("../config/currency");
 
 const activeCrashGames = new Set();
 
@@ -17,19 +18,19 @@ const START_DELAY_MS = 1500;
 const MAX_GAME_TIME_MS = 25000;
 
 function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function randomCrashPoint() {
   const roll = Math.random();
 
-  if (roll < 0.25) return Number((1.10 + Math.random() * 0.45).toFixed(2)); // 1.10x - 1.55x
-  if (roll < 0.55) return Number((1.55 + Math.random() * 0.95).toFixed(2)); // 1.55x - 2.50x
-  if (roll < 0.78) return Number((2.50 + Math.random() * 2.00).toFixed(2)); // 2.50x - 4.50x
-  if (roll < 0.92) return Number((4.50 + Math.random() * 4.50).toFixed(2)); // 4.50x - 9.00x
-  if (roll < 0.98) return Number((9.00 + Math.random() * 8.00).toFixed(2)); // 9.00x - 17.00x
+  if (roll < 0.25) return Number((1.10 + Math.random() * 0.45).toFixed(2));
+  if (roll < 0.55) return Number((1.55 + Math.random() * 0.95).toFixed(2));
+  if (roll < 0.78) return Number((2.50 + Math.random() * 2.00).toFixed(2));
+  if (roll < 0.92) return Number((4.50 + Math.random() * 4.50).toFixed(2));
+  if (roll < 0.98) return Number((9.00 + Math.random() * 8.00).toFixed(2));
 
-  return Number((17.00 + Math.random() * 18.00).toFixed(2)); // 17.00x - 35.00x
+  return Number((17.00 + Math.random() * 18.00).toFixed(2));
 }
 
 function getMultiplier(elapsedMs) {
@@ -43,21 +44,10 @@ function makeBar(multiplier, crashPoint, status) {
   const filled = Math.max(1, Math.floor(ratio * blocks));
   const empty = blocks - filled;
 
-  if (status === "crashed") {
-    return "🟥".repeat(filled) + "⬛".repeat(empty);
-  }
-
-  if (status === "cashed") {
-    return "🟩".repeat(filled) + "⬛".repeat(empty);
-  }
-
-  if (multiplier >= 5) {
-    return "🟧".repeat(filled) + "⬛".repeat(empty);
-  }
-
-  if (multiplier >= 2.5) {
-    return "🟨".repeat(filled) + "⬛".repeat(empty);
-  }
+  if (status === "crashed") return "🟥".repeat(filled) + "⬛".repeat(empty);
+  if (status === "cashed") return "🟩".repeat(filled) + "⬛".repeat(empty);
+  if (multiplier >= 5) return "🟧".repeat(filled) + "⬛".repeat(empty);
+  if (multiplier >= 2.5) return "🟨".repeat(filled) + "⬛".repeat(empty);
 
   return "🟩".repeat(filled) + "⬛".repeat(empty);
 }
@@ -92,7 +82,6 @@ function makeButtons(userId, state = "playing") {
 }
 
 function makeEmbed({
-  user,
   bet,
   multiplier,
   potentialWin,
@@ -102,13 +91,13 @@ function makeEmbed({
   countdown = null,
 }) {
   let color = 0xf1c40f;
-  let title = "🚀 EGG CRASH";
+  let title = "🚀 CHIP CRASH";
   let headline = `**${multiplier.toFixed(2)}x**`;
   let resultText = "Press **CASH OUT** before the rocket crashes.";
 
   if (status === "starting") {
     color = 0x3498db;
-    title = "🚀 EGG CRASH STARTING";
+    title = "🚀 CHIP CRASH STARTING";
     headline = `Starting in **${countdown}**...`;
     resultText = "Get ready.";
   }
@@ -123,35 +112,35 @@ function makeEmbed({
     color = 0x2ecc71;
     title = "✅ CASHED OUT";
     headline = `💰 **${multiplier.toFixed(2)}x**`;
-    resultText = `You won **${winnings} Eggs**.`;
+    resultText = `You won **${formatCurrency(winnings)}**.`;
   }
 
   if (status === "crashed") {
     color = 0xe74c3c;
     title = "💥 CRASHED";
     headline = `💥 **${multiplier.toFixed(2)}x**`;
-    resultText = `You lost **${bet} Eggs**.`;
+    resultText = `You lost **${formatCurrency(bet)}**.`;
   }
 
   let description =
     `${headline}\n\n` +
     `${makeBar(multiplier, multiplier + 1, status)}\n\n` +
-    `🥚 **Bet:** ${bet} Eggs\n` +
-    `💰 **Cashout Value:** ${potentialWin} Eggs\n\n` +
+    `🟡 **Bet:** ${formatCurrency(bet)}\n` +
+    `💰 **Cashout Value:** ${formatCurrency(potentialWin)}\n\n` +
     `${resultText}`;
 
   if (balance !== null) {
-    description += `\n\n🏦 **Balance:** ${balance} Eggs`;
+    description += `\n\n🏦 **Balance:** ${formatCurrency(balance)}`;
   }
 
   return new EmbedBuilder()
     .setColor(color)
     .setTitle(title)
     .setDescription(description)
-    .setFooter({ text: "EggHub Crash" });
+    .setFooter({ text: "EggHub Casino Crash" });
 }
 
-async function getUserEggs(userId) {
+async function getUserChips(userId) {
   const result = await pool.query(
     "SELECT eggs FROM users WHERE discord_id = $1",
     [userId]
@@ -191,11 +180,11 @@ async function addWinnings(userId, username, amount) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("crash")
-    .setDescription("Play EggHub Crash")
-    .addIntegerOption(option =>
+    .setDescription("Play EggHub Casino Crash")
+    .addIntegerOption((option) =>
       option
         .setName("bet")
-        .setDescription("Amount of Eggs to bet")
+        .setDescription("Amount of Yolk Chips to bet")
         .setRequired(true)
     ),
 
@@ -206,7 +195,7 @@ module.exports = {
 
     if (originalBet < MIN_BET || originalBet > MAX_BET) {
       return interaction.reply({
-        content: `Bet must be between ${MIN_BET} and ${MAX_BET} Eggs.`,
+        content: `Bet must be between ${formatCurrency(MIN_BET)} and ${formatCurrency(MAX_BET)}.`,
         ephemeral: true,
       });
     }
@@ -247,14 +236,14 @@ module.exports = {
       startTime = null;
       crashPoint = randomCrashPoint();
 
-      const currentEggs = await getUserEggs(userId);
+      const currentChips = await getUserChips(userId);
 
-      if (currentEggs < currentBet) {
+      if (currentChips < currentBet) {
         endActiveGame();
 
         if (message) {
           await message.edit({
-            content: `❌ You only have ${currentEggs} Eggs. You need ${currentBet} Eggs to play again.`,
+            content: `❌ You only have ${formatCurrency(currentChips)}. You need ${formatCurrency(currentBet)} to play again.`,
             embeds: [],
             components: [],
           }).catch(() => null);
@@ -270,7 +259,7 @@ module.exports = {
 
         if (message) {
           await message.edit({
-            content: "❌ You do not have enough Eggs for that bet.",
+            content: "❌ You do not have enough Yolk Chips for that bet.",
             embeds: [],
             components: [],
           }).catch(() => null);
@@ -280,7 +269,6 @@ module.exports = {
       }
 
       const startingEmbed = makeEmbed({
-        user: interaction.user,
         bet: currentBet,
         multiplier: 1.0,
         potentialWin: currentBet,
@@ -300,7 +288,7 @@ module.exports = {
           time: 15 * 60 * 1000,
         });
 
-        collector.on("collect", async buttonInteraction => {
+        collector.on("collect", async (buttonInteraction) => {
           try {
             if (buttonInteraction.user.id !== userId) {
               return buttonInteraction.reply({
@@ -340,12 +328,11 @@ module.exports = {
               gameStarted = false;
               clearGameTimers();
 
-              const balance = await getUserEggs(userId);
+              const balance = await getUserChips(userId);
 
               await message.edit({
                 embeds: [
                   makeEmbed({
-                    user: interaction.user,
                     bet: currentBet,
                     multiplier: crashPoint,
                     potentialWin: 0,
@@ -369,7 +356,6 @@ module.exports = {
             await message.edit({
               embeds: [
                 makeEmbed({
-                  user: interaction.user,
                   bet: currentBet,
                   multiplier: cashMultiplier,
                   potentialWin: winnings,
@@ -406,7 +392,6 @@ module.exports = {
       await message.edit({
         embeds: [
           makeEmbed({
-            user: interaction.user,
             bet: currentBet,
             multiplier: 1.0,
             potentialWin: currentBet,
@@ -431,12 +416,11 @@ module.exports = {
             gameStarted = false;
             clearGameTimers();
 
-            const balance = await getUserEggs(userId);
+            const balance = await getUserChips(userId);
 
             await message.edit({
               embeds: [
                 makeEmbed({
-                  user: interaction.user,
                   bet: currentBet,
                   multiplier: crashPoint,
                   potentialWin: 0,
@@ -453,7 +437,6 @@ module.exports = {
           await message.edit({
             embeds: [
               makeEmbed({
-                user: interaction.user,
                 bet: currentBet,
                 multiplier,
                 potentialWin: Math.floor(currentBet * multiplier),
