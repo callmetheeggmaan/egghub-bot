@@ -20,7 +20,7 @@ function getRandomReward() {
     { amount: 20, chance: 20 },
     { amount: 50, chance: 12 },
     { amount: 75, chance: 6 },
-    { amount: 100, chance: 2 },
+    { amount: 1000, chance: 1 },
   ];
 
   const roll = Math.random() * 100;
