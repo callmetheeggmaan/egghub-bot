@@ -6,10 +6,12 @@ const pool = require("./db/pool");
 const roleExpiry = require("./utils/roleExpiry");
 const buyItem = require("./utils/buyItem");
 const startLiveLeaderboard = require("./utils/liveLeaderboard");
+const { startRandomDrops } = require("./utils/randomDrops");
+const { getEggMultiplier } = require("./utils/boosts");
+const { formatCurrency } = require("./config/currency");
 
 const {
   trackDropActivity,
-  startSmartDrops,
   handleDropClaim,
 } = require("./utils/randomDrop");
 
@@ -43,7 +45,7 @@ function getLogChannel(guild) {
 const commandsPath = path.join(__dirname, "commands");
 const commandFiles = fs
   .readdirSync(commandsPath)
-  .filter(file => file.endsWith(".js"));
+  .filter((file) => file.endsWith(".js"));
 
 for (const file of commandFiles) {
   const filePath = path.join(commandsPath, file);
@@ -56,15 +58,20 @@ for (const file of commandFiles) {
 
 // Ready
 client.once(Events.ClientReady, () => {
-  console.log(`EggHub Bot is online as ${client.user.tag}`);
+  console.log(`EggHub Casino Bot is online as ${client.user.tag}`);
 
   roleExpiry(client);
-  startSmartDrops(client);
   startLiveLeaderboard(client);
+
+  // New 4-hour casino jackpot drops
+  startRandomDrops(client);
+
+  // Old smart drops disabled so drops are not spammed every few minutes.
+  // startSmartDrops(client);
 });
 
 // Welcome system
-client.on(Events.GuildMemberAdd, async member => {
+client.on(Events.GuildMemberAdd, async (member) => {
   try {
     const welcomeChannel = member.guild.channels.cache.get(process.env.WELCOME_CHANNEL_ID);
     const starterRole = member.guild.roles.cache.get(process.env.STARTER_ROLE_ID);
@@ -74,7 +81,7 @@ client.on(Events.GuildMemberAdd, async member => {
 
     if (welcomeChannel) {
       await welcomeChannel.send(
-        `🥚 Welcome to EggHub, ${member}!\n\nPick your roles with /roles and start earning Eggs.`
+        `🎰 Welcome to EggHub Casino, ${member}!\n\nPick your roles with /roles and start earning Yolk Chips.`
       );
     }
 
@@ -97,7 +104,7 @@ client.on(Events.GuildMemberAdd, async member => {
 });
 
 // Leave logs
-client.on(Events.GuildMemberRemove, async member => {
+client.on(Events.GuildMemberRemove, async (member) => {
   try {
     const logChannel = getLogChannel(member.guild);
     if (!logChannel) return;
@@ -109,7 +116,7 @@ client.on(Events.GuildMemberRemove, async member => {
 });
 
 // Deleted message logs
-client.on(Events.MessageDelete, async message => {
+client.on(Events.MessageDelete, async (message) => {
   try {
     if (!message.guild) return;
     if (message.author?.bot) return;
@@ -161,8 +168,8 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
 });
 
 // Interaction handler
-client.on(Events.InteractionCreate, async interaction => {
-  // Random drop claim button
+client.on(Events.InteractionCreate, async (interaction) => {
+  // Old randomDrop claim button support
   if (interaction.isButton()) {
     const handled = await handleDropClaim(interaction);
     if (handled) return;
@@ -200,7 +207,7 @@ client.on(Events.InteractionCreate, async interaction => {
       });
     }
 
-    // Shop select
+    // Old shop select support
     if (interaction.customId === "shop_select") {
       const selected = interaction.values[0];
       return buyItem(interaction, selected);
@@ -233,13 +240,14 @@ client.on(Events.InteractionCreate, async interaction => {
   }
 });
 
-// Chat earn system + drop tracking
+// Chat earn system + activity tracking
 const messageCooldowns = new Map();
 
-client.on(Events.MessageCreate, async message => {
+client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
 
+  // Keeps old activity tracker working, but old smart drops are disabled above.
   trackDropActivity(message);
 
   const userId = message.author.id;
@@ -252,19 +260,23 @@ client.on(Events.MessageCreate, async message => {
   messageCooldowns.set(userId, now);
 
   try {
+    const baseReward = 2;
+    const multiplier = await getEggMultiplier(userId);
+    const finalReward = Math.floor(baseReward * multiplier);
+
     await pool.query(
       `
       INSERT INTO users (discord_id, username, eggs)
-      VALUES ($1, $2, 2)
+      VALUES ($1, $2, $3)
       ON CONFLICT (discord_id)
       DO UPDATE SET
-        eggs = users.eggs + 2,
+        eggs = users.eggs + $3,
         username = EXCLUDED.username
       `,
-      [userId, username]
+      [userId, username, finalReward]
     );
 
-    console.log(`${username} earned 2 Eggs`);
+    console.log(`${username} earned ${formatCurrency(finalReward)}`);
   } catch (err) {
     console.error("Chat earn error:", err);
   }

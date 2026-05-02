@@ -1,10 +1,11 @@
-const { SlashCommandBuilder } = require("discord.js");
+const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const pool = require("../db/pool");
+const { formatCurrency } = require("../config/currency");
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("balance")
-    .setDescription("Check your Egg balance"),
+    .setDescription("Check your Yolk Chips balance"),
 
   async execute(interaction) {
     const userId = interaction.user.id;
@@ -22,18 +23,29 @@ module.exports = {
           [userId, username, 0]
         );
 
-        return interaction.reply(`🥚 ${username} has 0 Eggs`);
+        const embed = new EmbedBuilder()
+          .setTitle("🎰 Casino Balance")
+          .setDescription(`**${username}** has ${formatCurrency(0)}`)
+          .setColor(0xffd700);
+
+        return interaction.reply({ embeds: [embed] });
       }
 
-      const eggs = result.rows[0].eggs;
+      const chips = result.rows[0].eggs;
 
-      await interaction.reply(`🥚 ${username} has ${eggs} Eggs`);
+      const embed = new EmbedBuilder()
+        .setTitle("🎰 Casino Balance")
+        .setDescription(`**${username}** has ${formatCurrency(chips)}`)
+        .setColor(0xffd700);
+
+      await interaction.reply({ embeds: [embed] });
     } catch (error) {
       console.error(error);
+
       await interaction.reply({
         content: "Database error",
-        ephemeral: true,
+        ephemeral: true
       });
     }
-  },
+  }
 };
