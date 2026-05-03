@@ -174,7 +174,6 @@ function buildOpenAgainRow() {
     new ButtonBuilder()
       .setCustomId("open_again")
       .setLabel("Open Another Vault")
-      .setEmoji("◆")
       .setStyle(ButtonStyle.Success)
   );
 }
@@ -189,7 +188,6 @@ function buildCaseButtons(cases) {
       new ButtonBuilder()
         .setCustomId(`open_${item.item_id}`)
         .setLabel(`${displayName} x${item.quantity}`)
-        .setEmoji(item.item_id === "golden_egg_case" ? "◆" : "▣")
         .setStyle(item.item_id === "golden_egg_case" ? ButtonStyle.Danger : ButtonStyle.Primary)
     );
   }
