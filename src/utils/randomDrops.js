@@ -6,34 +6,33 @@ const {
 } = require("discord.js");
 
 const pool = require("../db/pool");
-const { formatCurrency } = require("../config/currency");
+const { BRAND, formatCurrency } = require("../config/brand");
 
 const DROP_INTERVAL_MS = 4 * 60 * 60 * 1000;
+const DROP_CLAIM_WINDOW_MS = 30 * 60 * 1000;
+const DELETE_AFTER_CLAIM_MS = 20 * 1000;
 
 const DROPS = [
   {
     id: "chip_jackpot_small",
-    type: "chips",
-    name: "Mini Chip Jackpot",
-    emoji: "🟡",
+    type: "coins",
+    name: "Mini Coin Jackpot",
     amount: 5000,
     rarity: "Common",
     weight: 45
   },
   {
     id: "chip_jackpot_medium",
-    type: "chips",
-    name: "Casino Cashout",
-    emoji: "💰",
+    type: "coins",
+    name: "Origin Cashout",
     amount: 15000,
     rarity: "Rare",
     weight: 30
   },
   {
     id: "chip_jackpot_big",
-    type: "chips",
+    type: "coins",
     name: "High Roller Payout",
-    emoji: "🎰",
     amount: 40000,
     rarity: "Epic",
     weight: 15
@@ -41,10 +40,9 @@ const DROPS = [
   {
     id: "golden_case_drop",
     type: "case",
-    name: "Golden Jackpot Case",
-    emoji: "💼",
+    name: "Golden Origin Vault",
     itemId: "golden_egg_case",
-    itemName: "Golden Jackpot Case",
+    itemName: "Golden Origin Vault",
     itemType: "case",
     rarity: "Legendary",
     weight: 6
@@ -52,10 +50,9 @@ const DROPS = [
   {
     id: "basic_case_drop",
     type: "case",
-    name: "Bronze Vault Case",
-    emoji: "📦",
+    name: "Bronze Origin Vault",
     itemId: "basic_egg_case",
-    itemName: "Bronze Vault Case",
+    itemName: "Bronze Origin Vault",
     itemType: "case",
     rarity: "Rare",
     weight: 20
@@ -63,10 +60,9 @@ const DROPS = [
   {
     id: "luck_boost_drop",
     type: "boost",
-    name: "Casino Luck Boost",
-    emoji: "🍀",
+    name: "Vault Luck Boost",
     boostId: "luck_boost_30m",
-    boostName: "Casino Luck Boost",
+    boostName: "Vault Luck Boost",
     multiplier: 1.35,
     durationMinutes: 30,
     rarity: "Epic",
@@ -75,10 +71,10 @@ const DROPS = [
 ];
 
 function getColorByRarity(rarity) {
-  if (rarity === "Legendary") return 0xfacc15;
-  if (rarity === "Epic") return 0xa855f7;
+  if (rarity === "Legendary") return BRAND.colour;
+  if (rarity === "Epic") return 0x8b5cf6;
   if (rarity === "Rare") return 0x3b82f6;
-  return 0x9ca3af;
+  return 0x8a8a8a;
 }
 
 function rollDrop() {
@@ -109,7 +105,7 @@ async function ensureUser(discordId, username) {
   }
 }
 
-async function addChips(discordId, amount) {
+async function addCoins(discordId, amount) {
   await pool.query(
     "UPDATE users SET eggs = eggs + $1 WHERE discord_id = $2",
     [amount, discordId]
@@ -147,19 +143,19 @@ async function activateBoost(discordId, drop) {
 async function applyDropReward(user, drop) {
   await ensureUser(user.id, user.username);
 
-  if (drop.type === "chips") {
-    await addChips(user.id, drop.amount);
+  if (drop.type === "coins") {
+    await addCoins(user.id, drop.amount);
     return `won **${formatCurrency(drop.amount)}**`;
   }
 
   if (drop.type === "case") {
     await addInventoryItem(user.id, drop);
-    return `won **${drop.emoji} ${drop.itemName}**`;
+    return `won **${drop.itemName}**`;
   }
 
   if (drop.type === "boost") {
     await activateBoost(user.id, drop);
-    return `won **${drop.emoji} ${drop.boostName}** for **${drop.durationMinutes} minutes**`;
+    return `won **${drop.boostName}** for **${drop.durationMinutes} minutes**`;
   }
 
   return "won a mystery reward";
@@ -167,34 +163,44 @@ async function applyDropReward(user, drop) {
 
 function buildDropEmbed(drop) {
   return new EmbedBuilder()
-    .setTitle("🎰 CASINO DROP HAS LANDED")
+    .setTitle("Origin Drop Available")
     .setDescription(
       [
-        "A rare casino drop has appeared.",
+        "A premium drop has entered the room.",
         "",
-        `${drop.emoji} **${drop.name}**`,
-        `Rarity: **${drop.rarity}**`,
+        `**Reward:** ${drop.name}`,
+        `**Tier:** ${drop.rarity}`,
         "",
-        "First player to press the button claims it."
+        "First player to claim receives the reward."
       ].join("\n")
     )
     .setColor(getColorByRarity(drop.rarity))
-    .setFooter({ text: "EggHub Casino • Drops every 4 hours" });
+    .setFooter({ text: `${BRAND.fullName} • Drops every 4 hours` });
 }
 
 function buildClaimedEmbed(drop, user, rewardText) {
   return new EmbedBuilder()
-    .setTitle("🎉 DROP CLAIMED")
+    .setTitle("Drop Claimed")
     .setDescription(
       [
         `${user} ${rewardText}`,
         "",
-        `${drop.emoji} **${drop.name}**`,
-        `Rarity: **${drop.rarity}**`
+        `**Reward:** ${drop.name}`,
+        `**Tier:** ${drop.rarity}`,
+        "",
+        "This message will clear shortly."
       ].join("\n")
     )
     .setColor(getColorByRarity(drop.rarity))
-    .setFooter({ text: "Next casino drop arrives later" });
+    .setFooter({ text: `${BRAND.fullName} • Drop complete` });
+}
+
+function buildExpiredEmbed() {
+  return new EmbedBuilder()
+    .setTitle("Drop Expired")
+    .setDescription("Nobody claimed this Origin drop in time.")
+    .setColor(0x6b7280)
+    .setFooter({ text: `${BRAND.fullName} • Drop expired` });
 }
 
 function buildDropButton() {
@@ -202,9 +208,18 @@ function buildDropButton() {
     new ButtonBuilder()
       .setCustomId("claim_casino_drop")
       .setLabel("Claim Drop")
-      .setEmoji("🎰")
       .setStyle(ButtonStyle.Success)
   );
+}
+
+async function deleteMessageLater(message, delayMs) {
+  setTimeout(async () => {
+    try {
+      await message.delete();
+    } catch (error) {
+      console.error("Failed to delete drop message:", error.message);
+    }
+  }, delayMs);
 }
 
 async function sendRandomDrop(client) {
@@ -232,7 +247,7 @@ async function sendRandomDrop(client) {
   let claimed = false;
 
   const collector = message.createMessageComponentCollector({
-    time: 30 * 60 * 1000
+    time: DROP_CLAIM_WINDOW_MS
   });
 
   collector.on("collect", async (interaction) => {
@@ -240,7 +255,7 @@ async function sendRandomDrop(client) {
 
     if (claimed) {
       return interaction.reply({
-        content: "❌ This drop has already been claimed.",
+        content: "This drop has already been claimed.",
         ephemeral: true
       });
     }
@@ -256,13 +271,15 @@ async function sendRandomDrop(client) {
       });
 
       collector.stop("claimed");
+
+      await deleteMessageLater(message, DELETE_AFTER_CLAIM_MS);
     } catch (error) {
       console.error("Drop claim error:", error);
 
       claimed = false;
 
       return interaction.reply({
-        content: "❌ Failed to claim this drop.",
+        content: "Failed to claim this drop.",
         ephemeral: true
       });
     }
@@ -273,14 +290,11 @@ async function sendRandomDrop(client) {
 
     try {
       await message.edit({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle("⌛ Casino Drop Expired")
-            .setDescription("Nobody claimed the drop in time.")
-            .setColor(0x6b7280)
-        ],
+        embeds: [buildExpiredEmbed()],
         components: []
       });
+
+      await deleteMessageLater(message, 15 * 1000);
     } catch (error) {
       console.error("Failed to expire drop:", error);
     }
@@ -288,7 +302,7 @@ async function sendRandomDrop(client) {
 }
 
 function startRandomDrops(client) {
-  console.log("Casino random drops started. Interval: 4 hours.");
+  console.log("Origin random drops started. Interval: 4 hours.");
 
   setTimeout(() => {
     sendRandomDrop(client);
