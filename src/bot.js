@@ -81,7 +81,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
     }
 
     if (logChannel) {
-      await logChannel.send(`✅ **Member Joined:** ${member.user.tag} (${member.id})`);
+      await logChannel.send(`Member Joined: ${member.user.tag} (${member.id})`);
     }
 
     await pool.query(
@@ -98,80 +98,63 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
-// Leave logs
-client.on(Events.GuildMemberRemove, async (member) => {
-  try {
-    const logChannel = getLogChannel(member.guild);
-    if (!logChannel) return;
-
-    await logChannel.send(`❌ **Member Left:** ${member.user.tag} (${member.id})`);
-  } catch (err) {
-    console.error("Leave log error:", err);
-  }
-});
-
-// Deleted message logs
-client.on(Events.MessageDelete, async (message) => {
-  try {
-    if (!message.guild) return;
-    if (message.author?.bot) return;
-
-    const logChannel = getLogChannel(message.guild);
-    if (!logChannel) return;
-
-    const author = message.author
-      ? `${message.author.tag} (${message.author.id})`
-      : "Unknown user";
-
-    const content = message.content || "[No text content / embed / attachment]";
-
-    await logChannel.send(
-      `🗑️ **Message Deleted**\n` +
-      `**User:** ${author}\n` +
-      `**Channel:** <#${message.channel.id}>\n` +
-      `**Message:** ${content.slice(0, 1500)}`
-    );
-  } catch (err) {
-    console.error("Delete log error:", err);
-  }
-});
-
-// Edited message logs
-client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
-  try {
-    if (!newMessage.guild) return;
-    if (newMessage.author?.bot) return;
-
-    const oldContent = oldMessage.content || "";
-    const newContent = newMessage.content || "";
-
-    if (oldContent === newContent) return;
-
-    const logChannel = getLogChannel(newMessage.guild);
-    if (!logChannel) return;
-
-    await logChannel.send(
-      `✏️ **Message Edited**\n` +
-      `**User:** ${newMessage.author.tag} (${newMessage.author.id})\n` +
-      `**Channel:** <#${newMessage.channel.id}>\n` +
-      `**Before:** ${oldContent.slice(0, 700) || "[empty]"}\n` +
-      `**After:** ${newContent.slice(0, 700) || "[empty]"}`
-    );
-  } catch (err) {
-    console.error("Edit log error:", err);
-  }
-});
-
 // Interaction handler
 client.on(Events.InteractionCreate, async (interaction) => {
-  // Old random drop claim button support
+
+  // BUTTON HANDLING
   if (interaction.isButton()) {
+
+    // Existing drop system
     const handled = await handleDropClaim(interaction);
     if (handled) return;
+
+    // ORIGIN PANEL BUTTONS
+
+    if (interaction.customId === "origin_panel_rules") {
+      return interaction.reply({
+        content:
+          "**Origin Rules**\n\n" +
+          "1. Respect all members\n" +
+          "2. No abuse or spam\n" +
+          "3. Do not exploit games\n" +
+          "4. Keep gameplay fair\n" +
+          "5. Staff decisions are final",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "origin_panel_shop") {
+      return interaction.reply({
+        content: "Use `/shop` to access the Origin Vault.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "origin_panel_open") {
+      return interaction.reply({
+        content: "Use `/open` to open your vaults.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "origin_panel_balance") {
+      return interaction.reply({
+        content: "Use `/balance` to check your Origin Coins.",
+        ephemeral: true
+      });
+    }
+
+    if (interaction.customId === "origin_panel_leaderboard") {
+      return interaction.reply({
+        content: "Leaderboard updates live in the leaderboard channel.",
+        ephemeral: true
+      });
+    }
   }
 
-  // Role selector
+  // SELECT MENUS
   if (interaction.isStringSelectMenu()) {
+
     if (interaction.customId === "role_select") {
       const rolesMap = {
         streamer: process.env.ROLE_STREAMER,
@@ -202,14 +185,13 @@ client.on(Events.InteractionCreate, async (interaction) => {
       });
     }
 
-    // Old shop select support
     if (interaction.customId === "shop_select") {
       const selected = interaction.values[0];
       return buyItem(interaction, selected);
     }
   }
 
-  // Slash commands
+  // SLASH COMMANDS
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
@@ -235,7 +217,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-// Chat earn system + activity tracking
+// Chat earning system
 const messageCooldowns = new Map();
 
 client.on(Events.MessageCreate, async (message) => {
