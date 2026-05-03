@@ -8,7 +8,7 @@ const buyItem = require("./utils/buyItem");
 const startLiveLeaderboard = require("./utils/liveLeaderboard");
 const { startRandomDrops } = require("./utils/randomDrops");
 const { getEggMultiplier } = require("./utils/boosts");
-const { formatCurrency } = require("./config/currency");
+const { formatCurrency } = require("./config/brand");
 
 const {
   trackDropActivity,
@@ -58,16 +58,11 @@ for (const file of commandFiles) {
 
 // Ready
 client.once(Events.ClientReady, () => {
-  console.log(`EggHub Casino Bot is online as ${client.user.tag}`);
+  console.log(`Origin Bot is online as ${client.user.tag}`);
 
   roleExpiry(client);
   startLiveLeaderboard(client);
-
-  // New 4-hour casino jackpot drops
   startRandomDrops(client);
-
-  // Old smart drops disabled so drops are not spammed every few minutes.
-  // startSmartDrops(client);
 });
 
 // Welcome system
@@ -81,7 +76,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
 
     if (welcomeChannel) {
       await welcomeChannel.send(
-        `🎰 Welcome to EggHub Casino, ${member}!\n\nPick your roles with /roles and start earning Yolk Chips.`
+        `Welcome to **Origin**, ${member}.\n\nPick your roles with /roles and start earning Origin Coins.`
       );
     }
 
@@ -169,7 +164,7 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
 
 // Interaction handler
 client.on(Events.InteractionCreate, async (interaction) => {
-  // Old randomDrop claim button support
+  // Old random drop claim button support
   if (interaction.isButton()) {
     const handled = await handleDropClaim(interaction);
     if (handled) return;
@@ -202,7 +197,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       }
 
       return interaction.reply({
-        content: "✅ Roles updated",
+        content: "Roles updated.",
         ephemeral: true,
       });
     }
@@ -228,12 +223,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.replied || interaction.deferred) {
       await interaction.followUp({
-        content: "Error executing command",
+        content: "Error executing command.",
         ephemeral: true,
       });
     } else {
       await interaction.reply({
-        content: "Error executing command",
+        content: "Error executing command.",
         ephemeral: true,
       });
     }
@@ -247,7 +242,6 @@ client.on(Events.MessageCreate, async (message) => {
   if (message.author.bot) return;
   if (!message.guild) return;
 
-  // Keeps old activity tracker working, but old smart drops are disabled above.
   trackDropActivity(message);
 
   const userId = message.author.id;
