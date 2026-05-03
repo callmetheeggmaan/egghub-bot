@@ -1,17 +1,18 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const pool = require("../db/pool");
+const { BRAND, originLine } = require("../config/brand");
 
-function getItemEmoji(itemType) {
-  if (itemType === "case") return "📦";
-  if (itemType === "role") return "🎭";
-  if (itemType === "boost") return "⚡";
-  return "🎁";
+function getItemIcon(itemType) {
+  if (itemType === "case") return "▣";
+  if (itemType === "role") return "♛";
+  if (itemType === "boost") return "◆";
+  return "◇";
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("inventory")
-    .setDescription("View your EggHub inventory."),
+    .setDescription("View your Origin inventory."),
 
   async execute(interaction) {
     const discordId = interaction.user.id;
@@ -29,20 +30,26 @@ module.exports = {
 
       if (result.rows.length === 0) {
         return interaction.reply({
-          content: "📦 Your inventory is empty. Buy cases or rewards from `/shop`.",
+          content: "Your Origin inventory is empty. Visit `/shop` to open the Vault.",
           ephemeral: true
         });
       }
 
       const embed = new EmbedBuilder()
-        .setTitle("📦 Your EggHub Inventory")
-        .setDescription("Everything you currently own.")
-        .setColor(0xffd700)
-        .setFooter({ text: "Use /open to open loot cases" });
+        .setTitle(`${BRAND.name} Inventory`)
+        .setDescription(
+          [
+            originLine(),
+            "Your owned boosts, vaults, and status rewards.",
+            originLine()
+          ].join("\n")
+        )
+        .setColor(BRAND.colour)
+        .setFooter({ text: `${BRAND.fullName} • Inventory` });
 
       for (const item of result.rows) {
         embed.addFields({
-          name: `${getItemEmoji(item.item_type)} ${item.item_name}`,
+          name: `${getItemIcon(item.item_type)} ${item.item_name}`,
           value: `Quantity: **${item.quantity}**\nType: **${item.item_type}**`,
           inline: true
         });
@@ -56,7 +63,7 @@ module.exports = {
       console.error("Inventory error:", error);
 
       return interaction.reply({
-        content: "❌ Failed to load your inventory.",
+        content: "Inventory could not be loaded.",
         ephemeral: true
       });
     }
