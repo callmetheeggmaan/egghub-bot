@@ -1,18 +1,18 @@
 const { SlashCommandBuilder, EmbedBuilder } = require("discord.js");
 const pool = require("../db/pool");
-const { formatCurrency } = require("../config/currency");
+const { BRAND, formatCurrency, originLine } = require("../config/brand");
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("balance")
-    .setDescription("Check your Yolk Chips balance"),
+    .setDescription("Check your Origin balance"),
 
   async execute(interaction) {
     const userId = interaction.user.id;
     const username = interaction.user.username;
 
     try {
-      let result = await pool.query(
+      const result = await pool.query(
         "SELECT * FROM users WHERE discord_id = $1",
         [userId]
       );
@@ -22,28 +22,29 @@ module.exports = {
           "INSERT INTO users (discord_id, username, eggs) VALUES ($1, $2, $3)",
           [userId, username, 0]
         );
-
-        const embed = new EmbedBuilder()
-          .setTitle("🎰 Casino Balance")
-          .setDescription(`**${username}** has ${formatCurrency(0)}`)
-          .setColor(0xffd700);
-
-        return interaction.reply({ embeds: [embed] });
       }
 
-      const chips = result.rows[0].eggs;
+      const balance = result.rows[0]?.eggs || 0;
 
       const embed = new EmbedBuilder()
-        .setTitle("🎰 Casino Balance")
-        .setDescription(`**${username}** has ${formatCurrency(chips)}`)
-        .setColor(0xffd700);
+        .setTitle(`${BRAND.name} Balance`)
+        .setDescription(
+          [
+            originLine(),
+            `**Player:** ${username}`,
+            `**Balance:** ${BRAND.currencyEmoji} ${formatCurrency(balance)}`,
+            originLine()
+          ].join("\n")
+        )
+        .setColor(BRAND.colour)
+        .setFooter({ text: `${BRAND.fullName} • ${BRAND.tagline}` });
 
-      await interaction.reply({ embeds: [embed] });
+      return interaction.reply({ embeds: [embed] });
     } catch (error) {
-      console.error(error);
+      console.error("Balance error:", error);
 
-      await interaction.reply({
-        content: "Database error",
+      return interaction.reply({
+        content: "Balance could not be loaded.",
         ephemeral: true
       });
     }
