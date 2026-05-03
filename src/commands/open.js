@@ -155,21 +155,44 @@ function buildOpeningEmbed(caseData, spinReward, step, total) {
     .setFooter({ text: `${BRAND.fullName} • Opening Vault` });
 }
 
-function buildWinEmbed(caseData, reward) {
+function buildWinEmbed(caseData, reward, jackpotWin = 0) {
+  const lines = [
+    originLine(),
+    `Vault: **${caseData.name}**`,
+    "",
+    `Reward: ${reward.icon} **${reward.name}**`,
+    `Tier: **${rarityTier(reward.rarity)}**`
+  ];
+
+  if (jackpotWin > 0) {
+    lines.push("");
+    lines.push("**ORIGIN JACKPOT HIT**");
+    lines.push(`Jackpot: **${formatCurrency(jackpotWin)}**`);
+  }
+
+  lines.push(originLine());
+
   return new EmbedBuilder()
-    .setTitle(`${BRAND.name} Reward Claimed`)
+    .setTitle(jackpotWin > 0 ? `${BRAND.name} Jackpot Claimed` : `${BRAND.name} Reward Claimed`)
+    .setDescription(lines.join("\n"))
+    .setColor(jackpotWin > 0 ? BRAND.colour : COLORS[reward.rarity] || caseData.color)
+    .setFooter({ text: `${BRAND.fullName} • Reward added to your account` });
+}
+
+function buildJackpotAnnouncement(interaction, jackpotWin) {
+  return new EmbedBuilder()
+    .setTitle("ORIGIN JACKPOT HIT")
     .setDescription(
       [
         originLine(),
-        `Vault: **${caseData.name}**`,
+        `${interaction.user} has claimed the Origin Jackpot.`,
         "",
-        `Reward: ${reward.icon} **${reward.name}**`,
-        `Tier: **${rarityTier(reward.rarity)}**`,
+        `**${formatCurrency(jackpotWin)}**`,
         originLine()
       ].join("\n")
     )
-    .setColor(COLORS[reward.rarity] || caseData.color)
-    .setFooter({ text: `${BRAND.fullName} • Reward added to your account` });
+    .setColor(BRAND.colour)
+    .setFooter({ text: `${BRAND.fullName} • Global Jackpot` });
 }
 
 function buildOpenAgainRow() {
@@ -384,11 +407,13 @@ async function openCase(interaction, buttonInteraction, caseId) {
 
   await applyReward(interaction, finalReward);
 
+  let jackpotWin = 0;
+
   if (await rollJackpotWin(0.5)) {
-    const jackpotWin = await payJackpot(discordId, username);
+    jackpotWin = await payJackpot(discordId, username);
 
     if (jackpotWin > 0) {
-      finalReward.name = `${finalReward.name} + ${formatCurrency(jackpotWin)} Jackpot`;
+      finalReward.name = `${finalReward.name} + ${formatCurrency(jackpotWin)}`;
       finalReward.rarity = "Legendary";
       finalReward.icon = "♚";
     }
@@ -397,9 +422,17 @@ async function openCase(interaction, buttonInteraction, caseId) {
   await sleep(700);
 
   await interaction.editReply({
-    embeds: [buildWinEmbed(caseData, finalReward)],
+    embeds: [buildWinEmbed(caseData, finalReward, jackpotWin)],
     components: [buildOpenAgainRow()]
   });
+
+  if (jackpotWin > 0) {
+    await sleep(1000);
+
+    await interaction.followUp({
+      embeds: [buildJackpotAnnouncement(interaction, jackpotWin)]
+    });
+  }
 }
 
 module.exports = {
