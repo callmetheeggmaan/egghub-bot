@@ -350,12 +350,20 @@ module.exports = {
       }
     });
 
-    selectCollector.on("end", async () => {
-      try {
-        await interaction.editReply({ components: [] });
-      } catch (error) {
-        console.error("Failed to disable shop menu:", error);
-      }
-    });
+selectCollector.on("end", async () => {
+  try {
+    const existingMessage = await message.fetch().catch(() => null);
+
+    if (!existingMessage) return;
+
+    await existingMessage.edit({
+      components: []
+    }).catch(() => null);
+  } catch (error) {
+    if (error.code !== 10008) {
+      console.error("Failed to disable shop menu:", error);
+    }
+  }
+});
   }
 };
