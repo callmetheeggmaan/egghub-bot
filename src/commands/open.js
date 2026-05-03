@@ -9,41 +9,42 @@ const {
 
 const pool = require("../db/pool");
 const { getLuckMultiplier } = require("../utils/boosts");
+const { BRAND, formatCurrency, originLine } = require("../config/brand");
 
 const COLORS = {
-  Common: 0x9ca3af,
+  Common: 0x8a8a8a,
   Rare: 0x3b82f6,
-  Epic: 0xa855f7,
-  Legendary: 0xfacc15,
+  Epic: 0x8b5cf6,
+  Legendary: BRAND.colour,
   Mythic: 0xff004c
 };
 
 const CASES = {
   basic_egg_case: {
-    name: "Basic Egg Case",
-    emoji: "📦",
-    color: 0x3b82f6,
+    name: "Bronze Origin Vault",
+    icon: "▣",
+    color: 0x8a8a8a,
     rewards: [
-      { type: "eggs", name: "100 Eggs", emoji: "🥚", amount: 100, chance: 40, rarity: "Common" },
-      { type: "eggs", name: "300 Eggs", emoji: "🥚", amount: 300, chance: 25, rarity: "Common" },
-      { type: "eggs", name: "700 Eggs", emoji: "🥚", amount: 700, chance: 15, rarity: "Rare" },
-      { type: "eggs", name: "1,500 Eggs", emoji: "💰", amount: 1500, chance: 8, rarity: "Epic" },
-      { type: "boost", name: "Double Eggs Boost", emoji: "⚡", boostId: "double_eggs_30m", chance: 7, rarity: "Rare" },
-      { type: "role", name: "Egg Hunter Role", emoji: "🏹", roleName: "Egg Hunter", chance: 5, rarity: "Epic" }
+      { type: "coins", name: "100 OC", icon: "◇", amount: 100, chance: 40, rarity: "Common" },
+      { type: "coins", name: "300 OC", icon: "◇", amount: 300, chance: 25, rarity: "Common" },
+      { type: "coins", name: "700 OC", icon: "◆", amount: 700, chance: 15, rarity: "Rare" },
+      { type: "coins", name: "1,500 OC", icon: "◆", amount: 1500, chance: 8, rarity: "Epic" },
+      { type: "boost", name: "Double Coin Boost", icon: "◆", boostId: "double_chips_30m", chance: 7, rarity: "Rare" },
+      { type: "role", name: "High Roller Role", icon: "♛", roleName: "High Roller", chance: 5, rarity: "Epic" }
     ]
   },
 
   golden_egg_case: {
-    name: "Golden Egg Case",
-    emoji: "💰",
-    color: 0xfacc15,
+    name: "Golden Origin Vault",
+    icon: "◆",
+    color: BRAND.colour,
     rewards: [
-      { type: "eggs", name: "500 Eggs", emoji: "🥚", amount: 500, chance: 30, rarity: "Common" },
-      { type: "eggs", name: "1,500 Eggs", emoji: "💰", amount: 1500, chance: 25, rarity: "Rare" },
-      { type: "eggs", name: "3,000 Eggs", emoji: "💎", amount: 3000, chance: 18, rarity: "Epic" },
-      { type: "eggs", name: "7,500 Eggs", emoji: "👑", amount: 7500, chance: 7, rarity: "Legendary" },
-      { type: "boost", name: "Luck Boost", emoji: "🍀", boostId: "luck_boost_30m", chance: 12, rarity: "Epic" },
-      { type: "role", name: "Golden Egg Role", emoji: "👑", roleName: "Golden Egg", chance: 8, rarity: "Legendary" }
+      { type: "coins", name: "500 OC", icon: "◇", amount: 500, chance: 30, rarity: "Common" },
+      { type: "coins", name: "1,500 OC", icon: "◆", amount: 1500, chance: 25, rarity: "Rare" },
+      { type: "coins", name: "3,000 OC", icon: "◆", amount: 3000, chance: 18, rarity: "Epic" },
+      { type: "coins", name: "7,500 OC", icon: "♚", amount: 7500, chance: 7, rarity: "Legendary" },
+      { type: "boost", name: "Vault Luck Boost", icon: "◇", boostId: "luck_boost_30m", chance: 12, rarity: "Epic" },
+      { type: "role", name: "Origin Elite Role", icon: "♚", roleName: "Origin Elite", chance: 8, rarity: "Legendary" }
     ]
   }
 };
@@ -55,15 +56,15 @@ function sleep(ms) {
 function progressBar(step, total) {
   const filled = Math.round((step / total) * 10);
   const empty = 10 - filled;
-  return "🟨".repeat(filled) + "⬛".repeat(empty);
+  return "◆".repeat(filled) + "◇".repeat(empty);
 }
 
-function rarityGlow(rarity) {
-  if (rarity === "Mythic") return "🔴🔴🔴🔴🔴";
-  if (rarity === "Legendary") return "🟨🟨🟨🟨🟨";
-  if (rarity === "Epic") return "🟪🟪🟪🟪⬛";
-  if (rarity === "Rare") return "🟦🟦🟦⬛⬛";
-  return "⬜⬜⬛⬛⬛";
+function rarityTier(rarity) {
+  if (rarity === "Mythic") return "MYTHIC TIER";
+  if (rarity === "Legendary") return "GOLD TIER";
+  if (rarity === "Epic") return "ELITE TIER";
+  if (rarity === "Rare") return "RARE TIER";
+  return "STANDARD TIER";
 }
 
 function rollReward(caseId, luck = 1) {
@@ -107,14 +108,23 @@ function getRandomReward(caseId) {
 
 function buildCaseSelectEmbed(cases) {
   const embed = new EmbedBuilder()
-    .setTitle("📦 EggHub Case Vault")
-    .setDescription("Choose a case below and open it with an animated reward reveal.")
-    .setColor(0xffd700)
-    .setFooter({ text: "EggHub Cases • Luck boosts improve rare reward chances" });
+    .setTitle(`${BRAND.name} Vault Access`)
+    .setDescription(
+      [
+        originLine(),
+        "Select a vault below to begin the reveal sequence.",
+        "Luck boosts improve rare reward odds.",
+        originLine()
+      ].join("\n")
+    )
+    .setColor(BRAND.colour)
+    .setFooter({ text: `${BRAND.fullName} • Vault System` });
 
   for (const item of cases) {
+    const displayName = CASES[item.item_id]?.name || item.item_name;
+
     embed.addFields({
-      name: `📦 ${item.item_name}`,
+      name: `▣ ${displayName}`,
       value: `Owned: **${item.quantity}**`,
       inline: true
     });
@@ -125,44 +135,46 @@ function buildCaseSelectEmbed(cases) {
 
 function buildOpeningEmbed(caseData, spinReward, step, total) {
   return new EmbedBuilder()
-    .setTitle(`${caseData.emoji} Opening ${caseData.name}`)
+    .setTitle(`${caseData.icon} ${caseData.name}`)
     .setDescription(
       [
-        "**Rolling reward...**",
+        originLine(),
+        "**Reveal sequence active**",
         "",
         progressBar(step, total),
         "",
-        `Current item: ${spinReward.emoji} **${spinReward.name}**`,
-        `Rarity: **${spinReward.rarity}**`,
-        rarityGlow(spinReward.rarity)
+        `Current reward: ${spinReward.icon} **${spinReward.name}**`,
+        `Tier: **${rarityTier(spinReward.rarity)}**`,
+        originLine()
       ].join("\n")
     )
-    .setColor(COLORS[spinReward.rarity] || caseData.color);
+    .setColor(COLORS[spinReward.rarity] || caseData.color)
+    .setFooter({ text: `${BRAND.fullName} • Opening Vault` });
 }
 
 function buildWinEmbed(caseData, reward) {
   return new EmbedBuilder()
-    .setTitle(`${reward.emoji} You Won!`)
+    .setTitle(`${BRAND.name} Reward Claimed`)
     .setDescription(
       [
-        `From: **${caseData.name}**`,
+        originLine(),
+        `Vault: **${caseData.name}**`,
         "",
-        `${reward.emoji} **${reward.name}**`,
-        "",
-        `Rarity: **${reward.rarity}**`,
-        rarityGlow(reward.rarity)
+        `Reward: ${reward.icon} **${reward.name}**`,
+        `Tier: **${rarityTier(reward.rarity)}**`,
+        originLine()
       ].join("\n")
     )
     .setColor(COLORS[reward.rarity] || caseData.color)
-    .setFooter({ text: "EggHub Cases • Reward added to your account" });
+    .setFooter({ text: `${BRAND.fullName} • Reward added to your account` });
 }
 
 function buildOpenAgainRow() {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId("open_again")
-      .setLabel("Open Another Case")
-      .setEmoji("📦")
+      .setLabel("Open Another Vault")
+      .setEmoji("◆")
       .setStyle(ButtonStyle.Success)
   );
 }
@@ -171,11 +183,13 @@ function buildCaseButtons(cases) {
   const row = new ActionRowBuilder();
 
   for (const item of cases.slice(0, 5)) {
+    const displayName = CASES[item.item_id]?.name || item.item_name;
+
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`open_${item.item_id}`)
-        .setLabel(`${item.item_name} x${item.quantity}`)
-        .setEmoji("📦")
+        .setLabel(`${displayName} x${item.quantity}`)
+        .setEmoji(item.item_id === "golden_egg_case" ? "◆" : "▣")
         .setStyle(item.item_id === "golden_egg_case" ? ButtonStyle.Danger : ButtonStyle.Primary)
     );
   }
@@ -215,7 +229,7 @@ async function removeItem(discordId, itemId) {
   );
 }
 
-async function addEggs(discordId, amount) {
+async function addCoins(discordId, amount) {
   await pool.query(
     "UPDATE users SET eggs = eggs + $1 WHERE discord_id = $2",
     [amount, discordId]
@@ -225,13 +239,18 @@ async function addEggs(discordId, amount) {
 async function activateBoost(discordId, reward) {
   const boostData = {
     double_eggs_30m: {
-      name: "Double Eggs Boost",
+      name: "Double Coin Boost",
+      multiplier: 2,
+      durationMinutes: 30
+    },
+    double_chips_30m: {
+      name: "Double Coin Boost",
       multiplier: 2,
       durationMinutes: 30
     },
     luck_boost_30m: {
-      name: "Luck Boost",
-      multiplier: 1.25,
+      name: "Vault Luck Boost",
+      multiplier: 1.35,
       durationMinutes: 30
     }
   };
@@ -267,8 +286,8 @@ async function giveRole(interaction, roleName) {
 async function applyReward(interaction, reward) {
   const discordId = interaction.user.id;
 
-  if (reward.type === "eggs") {
-    await addEggs(discordId, reward.amount);
+  if (reward.type === "coins") {
+    await addCoins(discordId, reward.amount);
   }
 
   if (reward.type === "boost") {
@@ -288,7 +307,7 @@ async function showCaseMenu(interaction, discordId) {
 
   if (cases.length === 0) {
     await interaction.editReply({
-      content: "❌ You have no cases to open. Buy one from `/shop` first.",
+      content: "No vaults available. Visit `/shop` to purchase one.",
       embeds: [],
       components: []
     });
@@ -315,7 +334,7 @@ async function openCase(interaction, buttonInteraction, caseId) {
 
   if (!ownedCase) {
     return buttonInteraction.reply({
-      content: "❌ You do not have this case anymore.",
+      content: "This vault is no longer available in your inventory.",
       ephemeral: true
     });
   }
@@ -323,9 +342,16 @@ async function openCase(interaction, buttonInteraction, caseId) {
   await buttonInteraction.update({
     embeds: [
       new EmbedBuilder()
-        .setTitle(`${caseData.emoji} Case Locked In`)
-        .setDescription("Preparing your reward roll...")
+        .setTitle(`${caseData.icon} Vault Locked In`)
+        .setDescription(
+          [
+            originLine(),
+            "Preparing reward sequence.",
+            originLine()
+          ].join("\n")
+        )
         .setColor(caseData.color)
+        .setFooter({ text: `${BRAND.fullName} • Sequence starting` })
     ],
     components: []
   });
@@ -359,13 +385,13 @@ async function openCase(interaction, buttonInteraction, caseId) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("open")
-    .setDescription("Open your EggHub cases."),
+    .setDescription("Open your Origin vaults."),
 
   async execute(interaction) {
     const discordId = interaction.user.id;
 
     await interaction.reply({
-      content: "📦 Loading your case vault...",
+      content: "Loading Origin Vault access...",
       fetchReply: true
     });
 
@@ -383,7 +409,7 @@ module.exports = {
     collector.on("collect", async (buttonInteraction) => {
       if (buttonInteraction.user.id !== interaction.user.id) {
         return buttonInteraction.reply({
-          content: "❌ This case menu is not yours.",
+          content: "This Origin Vault menu is not assigned to you.",
           ephemeral: true
         });
       }
@@ -397,7 +423,7 @@ module.exports = {
 
       if (!CASES[caseId]) {
         return buttonInteraction.reply({
-          content: "❌ This case no longer exists.",
+          content: "This vault is no longer available.",
           ephemeral: true
         });
       }
@@ -409,13 +435,13 @@ module.exports = {
 
         if (!buttonInteraction.replied && !buttonInteraction.deferred) {
           return buttonInteraction.reply({
-            content: `❌ Case opening failed: ${error.message}`,
+            content: `Vault opening failed: ${error.message}`,
             ephemeral: true
           });
         }
 
         return interaction.editReply({
-          content: `❌ Case opening failed: ${error.message}`,
+          content: `Vault opening failed: ${error.message}`,
           embeds: [],
           components: []
         });
