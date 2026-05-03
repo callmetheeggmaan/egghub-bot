@@ -113,7 +113,6 @@ function buildBuyRows(category = "all") {
       new ButtonBuilder()
         .setCustomId(`shop_buy_${item.id}`)
         .setLabel(formatCurrency(item.price))
-        .setEmoji(item.emoji)
         .setStyle(
           item.rarity === "Legendary"
             ? ButtonStyle.Danger
