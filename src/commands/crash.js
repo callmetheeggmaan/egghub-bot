@@ -7,8 +7,9 @@ const {
 } = require("discord.js");
 
 const pool = require("../db/pool");
-const { formatCurrency } = require("../config/currency");
+const { BRAND, formatCurrency, originLine } = require("../config/brand");
 const { addToJackpot, rollJackpotWin, payJackpot } = require("../utils/jackpot");
+
 const activeCrashGames = new Set();
 
 const MIN_BET = 10;
@@ -44,12 +45,12 @@ function makeBar(multiplier, crashPoint, status) {
   const filled = Math.max(1, Math.floor(ratio * blocks));
   const empty = blocks - filled;
 
-  if (status === "crashed") return "🟥".repeat(filled) + "⬛".repeat(empty);
-  if (status === "cashed") return "🟩".repeat(filled) + "⬛".repeat(empty);
-  if (multiplier >= 5) return "🟧".repeat(filled) + "⬛".repeat(empty);
-  if (multiplier >= 2.5) return "🟨".repeat(filled) + "⬛".repeat(empty);
+  if (status === "crashed") return "■".repeat(filled) + "□".repeat(empty);
+  if (status === "cashed") return "◆".repeat(filled) + "◇".repeat(empty);
+  if (multiplier >= 5) return "◆".repeat(filled) + "◇".repeat(empty);
+  if (multiplier >= 2.5) return "◆".repeat(filled) + "◇".repeat(empty);
 
-  return "🟩".repeat(filled) + "⬛".repeat(empty);
+  return "◆".repeat(filled) + "◇".repeat(empty);
 }
 
 function makeButtons(userId, state = "playing") {
@@ -58,8 +59,7 @@ function makeButtons(userId, state = "playing") {
       new ActionRowBuilder().addComponents(
         new ButtonBuilder()
           .setCustomId(`crash_cashout_${userId}`)
-          .setLabel("CASH OUT")
-          .setEmoji("💰")
+          .setLabel("Cash Out")
           .setStyle(ButtonStyle.Success)
       ),
     ];
@@ -69,13 +69,11 @@ function makeButtons(userId, state = "playing") {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(`crash_again_${userId}`)
-        .setLabel("PLAY AGAIN")
-        .setEmoji("🔁")
+        .setLabel("Play Again")
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`crash_done_${userId}`)
-        .setLabel("DONE")
-        .setEmoji("🛑")
+        .setLabel("Done")
         .setStyle(ButtonStyle.Secondary)
     ),
   ];
@@ -89,58 +87,80 @@ function makeEmbed({
   winnings = 0,
   balance = null,
   countdown = null,
+  jackpotWin = 0,
 }) {
-  let color = 0xf1c40f;
-  let title = "🚀 CHIP CRASH";
+  let color = BRAND.colour;
+  let title = "Origin Crash";
   let headline = `**${multiplier.toFixed(2)}x**`;
-  let resultText = "Press **CASH OUT** before the rocket crashes.";
+  let resultText = "Cash out before the market collapses.";
 
   if (status === "starting") {
-    color = 0x3498db;
-    title = "🚀 CHIP CRASH STARTING";
-    headline = `Starting in **${countdown}**...`;
-    resultText = "Get ready.";
+    color = 0x3b82f6;
+    title = "Origin Crash Starting";
+    headline = `Starting in **${countdown}**`;
+    resultText = "Prepare your position.";
   }
 
   if (status === "playing") {
-    if (multiplier >= 2.5) headline = `🔥 **${multiplier.toFixed(2)}x**`;
-    if (multiplier >= 5) headline = `🚨 **${multiplier.toFixed(2)}x**`;
-    if (multiplier >= 10) headline = `💀 **${multiplier.toFixed(2)}x**`;
+    if (multiplier >= 2.5) headline = `**${multiplier.toFixed(2)}x**`;
+    if (multiplier >= 5) headline = `**${multiplier.toFixed(2)}x**`;
+    if (multiplier >= 10) headline = `**${multiplier.toFixed(2)}x**`;
   }
 
   if (status === "cashed") {
-    color = 0x2ecc71;
-    title = "✅ CASHED OUT";
-    headline = `💰 **${multiplier.toFixed(2)}x**`;
-    resultText = `You won **${formatCurrency(winnings)}**.`;
+    color = 0x22c55e;
+    title = jackpotWin > 0 ? "Origin Jackpot Cashout" : "Cashed Out";
+    headline = `**${multiplier.toFixed(2)}x**`;
+    resultText = jackpotWin > 0
+      ? `You won **${formatCurrency(winnings)}**, including a jackpot of **${formatCurrency(jackpotWin)}**.`
+      : `You won **${formatCurrency(winnings)}**.`;
   }
 
   if (status === "crashed") {
-    color = 0xe74c3c;
-    title = "💥 CRASHED";
-    headline = `💥 **${multiplier.toFixed(2)}x**`;
+    color = 0xef4444;
+    title = "Crashed";
+    headline = `**${multiplier.toFixed(2)}x**`;
     resultText = `You lost **${formatCurrency(bet)}**.`;
   }
 
   let description =
+    `${originLine()}\n` +
     `${headline}\n\n` +
     `${makeBar(multiplier, multiplier + 1, status)}\n\n` +
-    `🟡 **Bet:** ${formatCurrency(bet)}\n` +
-    `💰 **Cashout Value:** ${formatCurrency(potentialWin)}\n\n` +
+    `**Bet:** ${formatCurrency(bet)}\n` +
+    `**Cashout Value:** ${formatCurrency(potentialWin)}\n\n` +
     `${resultText}`;
 
   if (balance !== null) {
-    description += `\n\n🏦 **Balance:** ${formatCurrency(balance)}`;
+    description += `\n\n**Balance:** ${formatCurrency(balance)}`;
   }
+
+  description += `\n${originLine()}`;
 
   return new EmbedBuilder()
     .setColor(color)
     .setTitle(title)
     .setDescription(description)
-    .setFooter({ text: "EggHub Casino Crash" });
+    .setFooter({ text: `${BRAND.fullName} • Crash` });
 }
 
-async function getUserChips(userId) {
+function buildJackpotAnnouncement(interaction, jackpotWin) {
+  return new EmbedBuilder()
+    .setTitle("ORIGIN JACKPOT HIT")
+    .setDescription(
+      [
+        originLine(),
+        `${interaction.user} claimed the Origin Jackpot through Crash.`,
+        "",
+        `**${formatCurrency(jackpotWin)}**`,
+        originLine()
+      ].join("\n")
+    )
+    .setColor(BRAND.colour)
+    .setFooter({ text: `${BRAND.fullName} • Global Jackpot` });
+}
+
+async function getUserBalance(userId) {
   const result = await pool.query(
     "SELECT eggs FROM users WHERE discord_id = $1",
     [userId]
@@ -153,8 +173,10 @@ async function removeBet(userId, username, bet) {
   const result = await pool.query(
     `
     UPDATE users
-    SET eggs = eggs - $1, username = $2
-    WHERE discord_id = $3 AND eggs >= $1
+    SET eggs = eggs - $1,
+        username = $2
+    WHERE discord_id = $3
+    AND eggs >= $1
     RETURNING eggs
     `,
     [bet, username, userId]
@@ -167,7 +189,8 @@ async function addWinnings(userId, username, amount) {
   const result = await pool.query(
     `
     UPDATE users
-    SET eggs = eggs + $1, username = $2
+    SET eggs = eggs + $1,
+        username = $2
     WHERE discord_id = $3
     RETURNING eggs
     `,
@@ -180,11 +203,11 @@ async function addWinnings(userId, username, amount) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("crash")
-    .setDescription("Play EggHub Casino Crash")
+    .setDescription("Play Origin Crash.")
     .addIntegerOption((option) =>
       option
         .setName("bet")
-        .setDescription("Amount of Yolk Chips to bet")
+        .setDescription("Amount of Origin Coins to bet")
         .setRequired(true)
     ),
 
@@ -202,7 +225,7 @@ module.exports = {
 
     if (activeCrashGames.has(userId)) {
       return interaction.reply({
-        content: "You already have a Crash game running.",
+        content: "You already have an Origin Crash game running.",
         ephemeral: true,
       });
     }
@@ -236,14 +259,14 @@ module.exports = {
       startTime = null;
       crashPoint = randomCrashPoint();
 
-      const currentChips = await getUserChips(userId);
+      const currentBalance = await getUserBalance(userId);
 
-      if (currentChips < currentBet) {
+      if (currentBalance < currentBet) {
         endActiveGame();
 
         if (message) {
           await message.edit({
-            content: `❌ You only have ${formatCurrency(currentChips)}. You need ${formatCurrency(currentBet)} to play again.`,
+            content: `You only have ${formatCurrency(currentBalance)}. You need ${formatCurrency(currentBet)} to play again.`,
             embeds: [],
             components: [],
           }).catch(() => null);
@@ -254,15 +277,12 @@ module.exports = {
 
       const balanceAfterBet = await removeBet(userId, username, currentBet);
 
-// 5% of bet goes to jackpot
-await addToJackpot(Math.floor(currentBet * 0.05), userId, username, "crash_bet");
-
       if (balanceAfterBet === null) {
         endActiveGame();
 
         if (message) {
           await message.edit({
-            content: "❌ You do not have enough Yolk Chips for that bet.",
+            content: "You do not have enough Origin Coins for that bet.",
             embeds: [],
             components: [],
           }).catch(() => null);
@@ -270,6 +290,13 @@ await addToJackpot(Math.floor(currentBet * 0.05), userId, username, "crash_bet")
 
         return;
       }
+
+      await addToJackpot(
+        Math.floor(currentBet * 0.05),
+        userId,
+        username,
+        "crash_bet"
+      );
 
       const startingEmbed = makeEmbed({
         bet: currentBet,
@@ -295,7 +322,7 @@ await addToJackpot(Math.floor(currentBet * 0.05), userId, username, "crash_bet")
           try {
             if (buttonInteraction.user.id !== userId) {
               return buttonInteraction.reply({
-                content: "This is not your Crash game.",
+                content: "This is not your Origin Crash game.",
                 ephemeral: true,
               });
             }
@@ -331,7 +358,7 @@ await addToJackpot(Math.floor(currentBet * 0.05), userId, username, "crash_bet")
               gameStarted = false;
               clearGameTimers();
 
-              const balance = await getUserChips(userId);
+              const balance = await getUserBalance(userId);
 
               await message.edit({
                 embeds: [
@@ -353,20 +380,18 @@ await addToJackpot(Math.floor(currentBet * 0.05), userId, username, "crash_bet")
             gameStarted = false;
             clearGameTimers();
 
-let winnings = Math.floor(currentBet * cashMultiplier);
+            let jackpotWin = 0;
+            let winnings = Math.floor(currentBet * cashMultiplier);
 
-// Jackpot roll (0.25% chance)
-if (await rollJackpotWin(0.25)) {
-  const jackpotWin = await payJackpot(userId, username);
-  winnings += jackpotWin;
+            if (await rollJackpotWin(0.25)) {
+              jackpotWin = await payJackpot(userId, username);
 
-  await interaction.followUp({
-    content: `💰 JACKPOT WON — ${formatCurrency(jackpotWin)}`,
-    ephemeral: false
-  });
-}
+              if (jackpotWin > 0) {
+                winnings += jackpotWin;
+              }
+            }
 
-const balance = await addWinnings(userId, username, winnings);
+            const balance = await addWinnings(userId, username, winnings);
 
             await message.edit({
               embeds: [
@@ -377,10 +402,17 @@ const balance = await addWinnings(userId, username, winnings);
                   status: "cashed",
                   winnings,
                   balance,
+                  jackpotWin,
                 }),
               ],
               components: makeButtons(userId, "ended"),
             }).catch(() => null);
+
+            if (jackpotWin > 0) {
+              await interaction.followUp({
+                embeds: [buildJackpotAnnouncement(interaction, jackpotWin)]
+              });
+            }
           } catch (err) {
             console.error("Crash button error:", err);
             endActiveGame();
@@ -431,7 +463,7 @@ const balance = await addWinnings(userId, username, winnings);
             gameStarted = false;
             clearGameTimers();
 
-            const balance = await getUserChips(userId);
+            const balance = await getUserBalance(userId);
 
             await message.edit({
               embeds: [
@@ -475,13 +507,13 @@ const balance = await addWinnings(userId, username, winnings);
 
       if (interaction.replied || interaction.deferred) {
         return interaction.followUp({
-          content: "Crash game failed.",
+          content: "Origin Crash failed.",
           ephemeral: true,
         }).catch(() => null);
       }
 
       return interaction.reply({
-        content: "Crash game failed.",
+        content: "Origin Crash failed.",
         ephemeral: true,
       }).catch(() => null);
     }
