@@ -7,6 +7,7 @@ const {
 
 const pool = require("../db/pool");
 const { BRAND, formatCurrency, originLine } = require("../config/brand");
+const { getJackpot } = require("./jackpot");
 
 let panelMessageId = null;
 
@@ -22,10 +23,13 @@ async function getPanelStats() {
     "SELECT username, eggs FROM users ORDER BY eggs DESC LIMIT 1"
   );
 
+  const jackpot = await getJackpot();
+
   return {
     totalPlayers: Number(users.rows[0]?.count || 0),
     totalCoins: Number(economy.rows[0]?.total || 0),
-    topPlayer: topPlayer.rows[0] || null
+    topPlayer: topPlayer.rows[0] || null,
+    jackpot
   };
 }
 
@@ -52,11 +56,12 @@ function buildPanelEmbed(stats) {
         "**Live Status**",
         `Players: **${stats.totalPlayers}**`,
         `Coins in Circulation: **${formatCurrency(stats.totalCoins)}**`,
+        `Origin Jackpot: **${formatCurrency(stats.jackpot)}**`,
         `Top Player: **${topPlayerText}**`,
         `Next Drop: **${getDropCountdown()}**`,
         "",
         "**Systems**",
-        "Vault Shop • Vault Opening • Balance • Rules • Leaderboard",
+        "Vault Shop • Vault Opening • Balance • Rules • Leaderboard • Jackpot",
         originLine()
       ].join("\n")
     )
