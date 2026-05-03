@@ -7,6 +7,7 @@ const roleExpiry = require("./utils/roleExpiry");
 const buyItem = require("./utils/buyItem");
 const startLiveLeaderboard = require("./utils/liveLeaderboard");
 const { startRandomDrops } = require("./utils/randomDrops");
+const { startOriginPanel } = require("./utils/originPanel");
 const { getEggMultiplier } = require("./utils/boosts");
 const { formatCurrency } = require("./config/brand");
 
@@ -63,6 +64,7 @@ client.once(Events.ClientReady, () => {
   roleExpiry(client);
   startLiveLeaderboard(client);
   startRandomDrops(client);
+  startOriginPanel(client);
 });
 
 // Welcome system
@@ -98,27 +100,86 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
+// Leave logs
+client.on(Events.GuildMemberRemove, async (member) => {
+  try {
+    const logChannel = getLogChannel(member.guild);
+    if (!logChannel) return;
+
+    await logChannel.send(`Member Left: ${member.user.tag} (${member.id})`);
+  } catch (err) {
+    console.error("Leave log error:", err);
+  }
+});
+
+// Deleted message logs
+client.on(Events.MessageDelete, async (message) => {
+  try {
+    if (!message.guild) return;
+    if (message.author?.bot) return;
+
+    const logChannel = getLogChannel(message.guild);
+    if (!logChannel) return;
+
+    const author = message.author
+      ? `${message.author.tag} (${message.author.id})`
+      : "Unknown user";
+
+    const content = message.content || "[No text content / embed / attachment]";
+
+    await logChannel.send(
+      `Message Deleted\n` +
+      `User: ${author}\n` +
+      `Channel: <#${message.channel.id}>\n` +
+      `Message: ${content.slice(0, 1500)}`
+    );
+  } catch (err) {
+    console.error("Delete log error:", err);
+  }
+});
+
+// Edited message logs
+client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+  try {
+    if (!newMessage.guild) return;
+    if (newMessage.author?.bot) return;
+
+    const oldContent = oldMessage.content || "";
+    const newContent = newMessage.content || "";
+
+    if (oldContent === newContent) return;
+
+    const logChannel = getLogChannel(newMessage.guild);
+    if (!logChannel) return;
+
+    await logChannel.send(
+      `Message Edited\n` +
+      `User: ${newMessage.author.tag} (${newMessage.author.id})\n` +
+      `Channel: <#${newMessage.channel.id}>\n` +
+      `Before: ${oldContent.slice(0, 700) || "[empty]"}\n` +
+      `After: ${newContent.slice(0, 700) || "[empty]"}`
+    );
+  } catch (err) {
+    console.error("Edit log error:", err);
+  }
+});
+
 // Interaction handler
 client.on(Events.InteractionCreate, async (interaction) => {
-
-  // BUTTON HANDLING
+  // Buttons
   if (interaction.isButton()) {
-
-    // Existing drop system
     const handled = await handleDropClaim(interaction);
     if (handled) return;
-
-    // ORIGIN PANEL BUTTONS
 
     if (interaction.customId === "origin_panel_rules") {
       return interaction.reply({
         content:
           "**Origin Rules**\n\n" +
-          "1. Respect all members\n" +
-          "2. No abuse or spam\n" +
-          "3. Do not exploit games\n" +
-          "4. Keep gameplay fair\n" +
-          "5. Staff decisions are final",
+          "1. Respect all members.\n" +
+          "2. No abuse, spam, harassment, or targeted behaviour.\n" +
+          "3. Do not exploit games, commands, rewards, or bot systems.\n" +
+          "4. Keep all gameplay fair.\n" +
+          "5. Staff decisions are final.",
         ephemeral: true
       });
     }
@@ -146,15 +207,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
     if (interaction.customId === "origin_panel_leaderboard") {
       return interaction.reply({
-        content: "Leaderboard updates live in the leaderboard channel.",
+        content: "The leaderboard updates live in the leaderboard channel.",
         ephemeral: true
       });
     }
   }
 
-  // SELECT MENUS
+  // Select menus
   if (interaction.isStringSelectMenu()) {
-
     if (interaction.customId === "role_select") {
       const rolesMap = {
         streamer: process.env.ROLE_STREAMER,
@@ -191,7 +251,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
   }
 
-  // SLASH COMMANDS
+  // Slash commands
   if (!interaction.isChatInputCommand()) return;
 
   const command = client.commands.get(interaction.commandName);
