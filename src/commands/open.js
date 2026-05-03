@@ -10,6 +10,7 @@ const {
 const pool = require("../db/pool");
 const { getLuckMultiplier } = require("../utils/boosts");
 const { BRAND, formatCurrency, originLine } = require("../config/brand");
+const { addToJackpot, rollJackpotWin, payJackpot } = require("../utils/jackpot");
 
 const COLORS = {
   Common: 0x8a8a8a,
@@ -24,6 +25,7 @@ const CASES = {
     name: "Bronze Origin Vault",
     icon: "▣",
     color: 0x8a8a8a,
+    jackpotContribution: 500,
     rewards: [
       { type: "coins", name: "100 OC", icon: "◇", amount: 100, chance: 40, rarity: "Common" },
       { type: "coins", name: "300 OC", icon: "◇", amount: 300, chance: 25, rarity: "Common" },
@@ -38,6 +40,7 @@ const CASES = {
     name: "Golden Origin Vault",
     icon: "◆",
     color: BRAND.colour,
+    jackpotContribution: 1500,
     rewards: [
       { type: "coins", name: "500 OC", icon: "◇", amount: 500, chance: 30, rarity: "Common" },
       { type: "coins", name: "1,500 OC", icon: "◆", amount: 1500, chance: 25, rarity: "Rare" },
@@ -323,6 +326,7 @@ async function showCaseMenu(interaction, discordId) {
 
 async function openCase(interaction, buttonInteraction, caseId) {
   const discordId = interaction.user.id;
+  const username = interaction.user.username;
   const caseData = CASES[caseId];
 
   const checkInventory = await getInventory(discordId);
@@ -370,7 +374,25 @@ async function openCase(interaction, buttonInteraction, caseId) {
   }
 
   await removeItem(discordId, caseId);
+
+  await addToJackpot(
+    caseData.jackpotContribution || 500,
+    discordId,
+    username,
+    "vault_open"
+  );
+
   await applyReward(interaction, finalReward);
+
+  if (await rollJackpotWin(0.5)) {
+    const jackpotWin = await payJackpot(discordId, username);
+
+    if (jackpotWin > 0) {
+      finalReward.name = `${finalReward.name} + ${formatCurrency(jackpotWin)} Jackpot`;
+      finalReward.rarity = "Legendary";
+      finalReward.icon = "♚";
+    }
+  }
 
   await sleep(700);
 

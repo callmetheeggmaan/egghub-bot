@@ -8,7 +8,7 @@ const {
 
 const pool = require("../db/pool");
 const { formatCurrency } = require("../config/currency");
-
+const { addToJackpot, rollJackpotWin, payJackpot } = require("../utils/jackpot");
 const activeCrashGames = new Set();
 
 const MIN_BET = 10;
@@ -254,6 +254,9 @@ module.exports = {
 
       const balanceAfterBet = await removeBet(userId, username, currentBet);
 
+// 5% of bet goes to jackpot
+await addToJackpot(Math.floor(currentBet * 0.05), userId, username, "crash_bet");
+
       if (balanceAfterBet === null) {
         endActiveGame();
 
@@ -350,8 +353,20 @@ module.exports = {
             gameStarted = false;
             clearGameTimers();
 
-            const winnings = Math.floor(currentBet * cashMultiplier);
-            const balance = await addWinnings(userId, username, winnings);
+let winnings = Math.floor(currentBet * cashMultiplier);
+
+// Jackpot roll (0.25% chance)
+if (await rollJackpotWin(0.25)) {
+  const jackpotWin = await payJackpot(userId, username);
+  winnings += jackpotWin;
+
+  await interaction.followUp({
+    content: `💰 JACKPOT WON — ${formatCurrency(jackpotWin)}`,
+    ephemeral: false
+  });
+}
+
+const balance = await addWinnings(userId, username, winnings);
 
             await message.edit({
               embeds: [
