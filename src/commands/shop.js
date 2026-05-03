@@ -10,13 +10,13 @@ const {
 
 const pool = require("../db/pool");
 const { SHOP_ITEMS } = require("../shop/shopItems");
-const { formatCurrency } = require("../config/currency");
+const { BRAND, formatCurrency, originLine } = require("../config/brand");
 
 const COLORS = {
-  Common: 0x9ca3af,
+  Common: 0x8a8a8a,
   Rare: 0x3b82f6,
-  Epic: 0xa855f7,
-  Legendary: 0xfacc15
+  Epic: 0x8b5cf6,
+  Legendary: BRAND.colour
 };
 
 function getCategoryItems(category) {
@@ -24,11 +24,11 @@ function getCategoryItems(category) {
   return SHOP_ITEMS.filter((item) => item.category === category);
 }
 
-function rarityBar(rarity) {
-  if (rarity === "Legendary") return "🟨🟨🟨🟨🟨";
-  if (rarity === "Epic") return "🟪🟪🟪🟪⬛";
-  if (rarity === "Rare") return "🟦🟦🟦⬛⬛";
-  return "⬜⬜⬛⬛⬛";
+function rarityLine(rarity) {
+  if (rarity === "Legendary") return "GOLD TIER";
+  if (rarity === "Epic") return "ELITE TIER";
+  if (rarity === "Rare") return "RARE TIER";
+  return "STANDARD TIER";
 }
 
 function buildShopEmbed(category = "all") {
@@ -38,29 +38,30 @@ function buildShopEmbed(category = "all") {
     all: "All Items",
     boosts: "Boosts",
     cases: "Vault Cases",
-    roles: "Casino Roles"
+    roles: "Origin Roles"
   }[category];
 
   const embed = new EmbedBuilder()
-    .setTitle("🎰 EggHub Casino Shop")
+    .setTitle(`${BRAND.name} Vault`)
     .setDescription(
       [
+        originLine(),
         `**Category:** ${categoryName}`,
         "",
-        "Spend your Yolk Chips on boosts, vault cases, and casino rewards.",
-        "Use the dropdown to switch sections, then press a buy button."
+        `Premium items, boosts and vault cases bought with ${BRAND.currencyName}.`,
+        "Use the selector below to browse. Use the buttons to purchase.",
+        originLine()
       ].join("\n")
     )
-    .setColor(0xffd700)
-    .setThumbnail("https://cdn-icons-png.flaticon.com/512/1055/1055823.png")
-    .setFooter({ text: "EggHub Casino • Items are bought using Yolk Chips" });
+    .setColor(BRAND.colour)
+    .setFooter({ text: `${BRAND.fullName} • ${BRAND.tagline}` });
 
   for (const item of items.slice(0, 6)) {
     embed.addFields({
       name: `${item.emoji} ${item.name} — ${formatCurrency(item.price)}`,
       value: [
         item.description,
-        `Rarity: **${item.rarity}** ${rarityBar(item.rarity)}`
+        `Tier: **${rarityLine(item.rarity)}**`
       ].join("\n"),
       inline: false
     });
@@ -73,34 +74,30 @@ function buildCategoryRow(selected = "all") {
   return new ActionRowBuilder().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId("shop_category")
-      .setPlaceholder("Choose casino shop category")
+      .setPlaceholder("Browse Origin Vault")
       .addOptions([
         {
           label: "All Items",
           value: "all",
-          emoji: "🛒",
-          description: "View everything",
+          description: "View the full Origin Vault",
           default: selected === "all"
         },
         {
           label: "Boosts",
           value: "boosts",
-          emoji: "⚡",
-          description: "Chip multipliers and casino luck",
+          description: "Multiplier and luck upgrades",
           default: selected === "boosts"
         },
         {
           label: "Vault Cases",
           value: "cases",
-          emoji: "💼",
-          description: "Cases with random casino rewards",
+          description: "Premium cases and rewards",
           default: selected === "cases"
         },
         {
-          label: "Casino Roles",
+          label: "Origin Roles",
           value: "roles",
-          emoji: "🎭",
-          description: "Buyable Discord status roles",
+          description: "Exclusive status roles",
           default: selected === "roles"
         }
       ])
@@ -115,7 +112,7 @@ function buildBuyRows(category = "all") {
     row.addComponents(
       new ButtonBuilder()
         .setCustomId(`shop_buy_${item.id}`)
-        .setLabel(formatCurrency(item.price).replace("🟡 ", ""))
+        .setLabel(formatCurrency(item.price))
         .setEmoji(item.emoji)
         .setStyle(
           item.rarity === "Legendary"
@@ -130,7 +127,7 @@ function buildBuyRows(category = "all") {
   return [row];
 }
 
-async function getUserChips(discordId, username) {
+async function getUserBalance(discordId, username) {
   const result = await pool.query(
     "SELECT eggs FROM users WHERE discord_id = $1",
     [discordId]
@@ -148,7 +145,7 @@ async function getUserChips(discordId, username) {
   return Number(result.rows[0].eggs || 0);
 }
 
-async function removeChips(discordId, amount) {
+async function removeBalance(discordId, amount) {
   await pool.query(
     "UPDATE users SET eggs = eggs - $1 WHERE discord_id = $2",
     [amount, discordId]
@@ -211,16 +208,16 @@ async function giveRole(interaction, item) {
 async function handlePurchase(interaction, item) {
   const discordId = interaction.user.id;
   const username = interaction.user.username;
-  const chips = await getUserChips(discordId, username);
+  const balance = await getUserBalance(discordId, username);
 
-  if (chips < item.price) {
+  if (balance < item.price) {
     return interaction.reply({
-      content: `❌ You need **${formatCurrency(item.price)}**, but you only have **${formatCurrency(chips)}**.`,
+      content: `Insufficient balance. Required: **${formatCurrency(item.price)}**. Current: **${formatCurrency(balance)}**.`,
       ephemeral: true
     });
   }
 
-  await removeChips(discordId, item.price);
+  await removeBalance(discordId, item.price);
 
   if (item.type === "boost") {
     await activateBoost(discordId, item);
@@ -238,16 +235,18 @@ async function handlePurchase(interaction, item) {
   await logPurchase(discordId, item);
 
   const successEmbed = new EmbedBuilder()
-    .setTitle("✅ Purchase Complete")
+    .setTitle("Purchase Complete")
     .setDescription(
       [
-        `You bought ${item.emoji} **${item.name}**`,
-        "",
-        `Price: **${formatCurrency(item.price)}**`,
-        `Rarity: **${item.rarity}**`
+        originLine(),
+        `**Item:** ${item.emoji} ${item.name}`,
+        `**Price:** ${formatCurrency(item.price)}`,
+        `**Tier:** ${rarityLine(item.rarity)}`,
+        originLine()
       ].join("\n")
     )
-    .setColor(COLORS[item.rarity] || 0xffd700);
+    .setColor(COLORS[item.rarity] || BRAND.colour)
+    .setFooter({ text: `${BRAND.fullName} • Transaction confirmed` });
 
   return interaction.reply({
     embeds: [successEmbed],
@@ -258,7 +257,7 @@ async function handlePurchase(interaction, item) {
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("shop")
-    .setDescription("Open the EggHub casino shop."),
+    .setDescription("Open the Origin Vault."),
 
   async execute(interaction) {
     let currentCategory = "all";
@@ -285,7 +284,7 @@ module.exports = {
     selectCollector.on("collect", async (selectInteraction) => {
       if (selectInteraction.user.id !== interaction.user.id) {
         return selectInteraction.reply({
-          content: "❌ This shop menu is not yours.",
+          content: "This Origin Vault menu is not assigned to you.",
           ephemeral: true
         });
       }
@@ -304,7 +303,7 @@ module.exports = {
     buttonCollector.on("collect", async (buttonInteraction) => {
       if (buttonInteraction.user.id !== interaction.user.id) {
         return buttonInteraction.reply({
-          content: "❌ This shop menu is not yours.",
+          content: "This Origin Vault menu is not assigned to you.",
           ephemeral: true
         });
       }
@@ -314,7 +313,7 @@ module.exports = {
 
       if (!item) {
         return buttonInteraction.reply({
-          content: "❌ This shop item no longer exists.",
+          content: "This Origin Vault item is no longer available.",
           ephemeral: true
         });
       }
@@ -327,7 +326,7 @@ module.exports = {
         if (buttonInteraction.replied || buttonInteraction.deferred) return;
 
         return buttonInteraction.reply({
-          content: `❌ Purchase failed: ${error.message}`,
+          content: `Purchase failed: ${error.message}`,
           ephemeral: true
         });
       }
