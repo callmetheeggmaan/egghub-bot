@@ -104,15 +104,29 @@ function buildCategoryRow(selected = "all") {
   );
 }
 
+function shortButtonName(item) {
+  const names = {
+    double_chips_30m: "Double Boost",
+    luck_boost_30m: "Luck Boost",
+    basic_egg_case: "Bronze Vault",
+    golden_egg_case: "Gold Vault",
+    egg_hunter_role: "High Roller",
+    golden_egg_role: "Origin Elite"
+  };
+
+  return names[item.id] || item.name;
+}
+
 function buildBuyRows(category = "all") {
   const items = getCategoryItems(category).slice(0, 5);
-  const row = new ActionRowBuilder();
+  const rows = [];
+  let currentRow = new ActionRowBuilder();
 
-  for (const item of items) {
-    row.addComponents(
+  items.forEach((item, index) => {
+    currentRow.addComponents(
       new ButtonBuilder()
         .setCustomId(`shop_buy_${item.id}`)
-        .setLabel(formatCurrency(item.price))
+        .setLabel(`${shortButtonName(item)} • ${formatCurrency(item.price)}`)
         .setStyle(
           item.rarity === "Legendary"
             ? ButtonStyle.Danger
@@ -121,9 +135,14 @@ function buildBuyRows(category = "all") {
               : ButtonStyle.Success
         )
     );
-  }
 
-  return [row];
+    if (currentRow.components.length === 2 || index === items.length - 1) {
+      rows.push(currentRow);
+      currentRow = new ActionRowBuilder();
+    }
+  });
+
+  return rows;
 }
 
 async function getUserBalance(discordId, username) {
