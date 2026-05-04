@@ -147,18 +147,16 @@ async function tryWinJackpot(discordId) {
 
 function buildEmbed({ user, bet, multiplier, status, crashPoint, payout, jackpotAmount }) {
   let description = "";
-  let color = 0x111111;
+  let color = 0xd4af37;
 
   if (status === "waiting") {
-    color = 0xd4af37;
     description =
-      `Private Origin Crash room created.\n\n` +
+      `Private Origin Crash room ready.\n\n` +
       `Bet: **${formatOC(bet)} OC**\n\n` +
-      `Press **Start Crash** when you are ready.`;
+      `Press **Start Crash** when ready.`;
   }
 
   if (status === "running") {
-    color = 0xd4af37;
     description =
       `The Origin rocket is climbing.\n\n` +
       `Multiplier: **${multiplier.toFixed(2)}x**\n` +
@@ -173,7 +171,6 @@ function buildEmbed({ user, bet, multiplier, status, crashPoint, payout, jackpot
   }
 
   if (status === "cashed") {
-    color = 0xd4af37;
     description =
       `You cashed out at **${multiplier.toFixed(2)}x**.\n\n` +
       `You won **${formatOC(payout)} OC**.`;
@@ -184,25 +181,11 @@ function buildEmbed({ user, bet, multiplier, status, crashPoint, payout, jackpot
     .setColor(color)
     .setDescription(description)
     .addFields(
-      {
-        name: "Player",
-        value: `${user}`,
-        inline: true,
-      },
-      {
-        name: "Bet",
-        value: `${formatOC(bet)} OC`,
-        inline: true,
-      },
-      {
-        name: "Jackpot",
-        value: `${formatOC(jackpotAmount)} OC`,
-        inline: true,
-      }
+      { name: "Player", value: `${user}`, inline: true },
+      { name: "Bet", value: `${formatOC(bet)} OC`, inline: true },
+      { name: "Jackpot", value: `${formatOC(jackpotAmount)} OC`, inline: true }
     )
-    .setFooter({
-      text: "Origin Casino • Private game room",
-    })
+    .setFooter({ text: "Origin Casino • Private game room" })
     .setTimestamp();
 }
 
@@ -219,13 +202,12 @@ function buildStartRow(startId, closeId) {
   );
 }
 
-function buildCashoutRow(customId, disabled = false) {
+function buildCashoutRow(cashoutId) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setCustomId(customId)
-      .setLabel(disabled ? "Game Ended" : "Cash Out")
-      .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Success)
-      .setDisabled(disabled)
+      .setCustomId(cashoutId)
+      .setLabel("Cash Out")
+      .setStyle(ButtonStyle.Success)
   );
 }
 
@@ -251,15 +233,90 @@ function buildGoToRoomRow(channelUrl) {
   );
 }
 
-async function runCrashRound({ gameChannel, interaction, bet }) {
+async function showWaitingPanel({ panelMessage, interaction, bet }) {
+  const userId = interaction.user.id;
+
+  const jackpotAmount = await getJackpot();
+  const startId = `origin_crash_start_${userId}_${Date.now()}`;
+  const closeId = `origin_crash_close_${userId}_${Date.now()}`;
+
+  const embed = buildEmbed({
+    user: interaction.user,
+    bet,
+    multiplier: 1,
+    status: "waiting",
+    crashPoint: 0,
+    payout: 0,
+    jackpotAmount,
+  });
+
+  await panelMessage.edit({
+    content: `${interaction.user}, your Origin Crash table is ready.`,
+    embeds: [embed],
+    components: [buildStartRow(startId, closeId)],
+  });
+
+  const collector = panelMessage.createMessageComponentCollector({
+    time: ROOM_CLOSE_DELAY,
+  });
+
+  collector.on("collect", async (buttonInteraction) => {
+    if (buttonInteraction.user.id !== userId) {
+      return buttonInteraction.reply({
+        content: "This is not your Origin game room.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (buttonInteraction.customId === closeId) {
+      collector.stop("closed");
+
+      await buttonInteraction.update({
+        content: "Closing this private room now.",
+        embeds: [],
+        components: [],
+      });
+
+      deleteGameRoom(panelMessage.channel, 1000);
+      return;
+    }
+
+    if (buttonInteraction.customId === startId) {
+      collector.stop("started");
+
+      await buttonInteraction.update({
+        content: `${interaction.user}, Origin Crash is starting...`,
+        components: [],
+      });
+
+      await runCrashRound({
+        panelMessage,
+        interaction,
+        bet,
+      });
+    }
+  });
+
+  collector.on("end", async (_, reason) => {
+    if (reason !== "started" && reason !== "closed") {
+      deleteGameRoom(panelMessage.channel, 1000);
+    }
+  });
+}
+
+async function runCrashRound({ panelMessage, interaction, bet }) {
   const userId = interaction.user.id;
 
   const balance = await getBalance(userId);
 
   if (balance < bet) {
-    await gameChannel.send({
-      content: `${interaction.user}, you do not have enough OC to play. Your balance is **${formatOC(balance)} OC**.`,
+    await panelMessage.edit({
+      content: `${interaction.user}, you do not have enough OC. Your balance is **${formatOC(balance)} OC**.`,
+      embeds: [],
+      components: [],
     });
+
+    deleteGameRoom(panelMessage.channel, 10000);
     return;
   }
 
@@ -286,49 +343,47 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
     }
   };
 
-  const safeEdit = async (message, payload) => {
+  const safeEdit = async (payload) => {
     if (editLocked || gameEnded) return;
 
     editLocked = true;
 
     try {
-      await message.edit(payload);
+      await panelMessage.edit(payload);
     } catch (error) {
-      console.error("Crash safeEdit error:", error);
+      console.error("Crash panel edit error:", error);
     } finally {
       editLocked = false;
     }
   };
 
-  const jackpotAmount = await getJackpot();
-
-  const startEmbed = buildEmbed({
+  const runningEmbed = buildEmbed({
     user: interaction.user,
     bet,
     multiplier,
     status: "running",
     crashPoint,
     payout: 0,
-    jackpotAmount,
+    jackpotAmount: await getJackpot(),
   });
 
-  const gameMessage = await gameChannel.send({
-    content: `${interaction.user}, your Origin Crash game has started.`,
-    embeds: [startEmbed],
+  await panelMessage.edit({
+    content: `${interaction.user}, your Origin Crash game is live.`,
+    embeds: [runningEmbed],
     components: [buildCashoutRow(cashoutId)],
   });
 
-  const collector = gameMessage.createMessageComponentCollector({
+  const collector = panelMessage.createMessageComponentCollector({
     time: 30000,
   });
 
-  async function sendAfterGameMessage(text) {
-    const afterMessage = await gameChannel.send({
+  async function showAfterGame(text) {
+    await panelMessage.edit({
       content: text,
       components: [buildAfterGameRow(playAgainId, closeId)],
     });
 
-    const afterCollector = afterMessage.createMessageComponentCollector({
+    const afterCollector = panelMessage.createMessageComponentCollector({
       time: ROOM_CLOSE_DELAY,
     });
 
@@ -341,23 +396,29 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
       }
 
       if (buttonInteraction.customId === closeId) {
+        afterCollector.stop("closed");
+
         await buttonInteraction.update({
           content: "Closing this private room now.",
+          embeds: [],
           components: [],
         });
 
-        deleteGameRoom(gameChannel, 1000);
+        deleteGameRoom(panelMessage.channel, 1000);
         return;
       }
 
       if (buttonInteraction.customId === playAgainId) {
+        afterCollector.stop("again");
+
         await buttonInteraction.update({
-          content: `Starting another Origin Crash round with the same bet: **${formatOC(bet)} OC**.`,
+          content: `Resetting Origin Crash with the same bet: **${formatOC(bet)} OC**.`,
+          embeds: [],
           components: [],
         });
 
-        await sendStartPrompt({
-          gameChannel,
+        await showWaitingPanel({
+          panelMessage,
           interaction,
           bet,
         });
@@ -365,8 +426,8 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
     });
 
     afterCollector.on("end", async (_, reason) => {
-      if (reason !== "messageDelete") {
-        deleteGameRoom(gameChannel, 1000);
+      if (reason !== "again" && reason !== "closed") {
+        deleteGameRoom(panelMessage.channel, 1000);
       }
     });
   }
@@ -416,16 +477,13 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
       jackpotAmount: newJackpotAmount,
     }).setDescription(finalDescription);
 
-    try {
-      await buttonInteraction.update({
-        embeds: [finalEmbed],
-        components: [buildCashoutRow(cashoutId, true)],
-      });
-    } catch (error) {
-      console.error("Crash cashout update error:", error);
-    }
+    await buttonInteraction.update({
+      content: `${interaction.user}, round complete.`,
+      embeds: [finalEmbed],
+      components: [],
+    });
 
-    await sendAfterGameMessage("Game complete. Play again or close the room.");
+    await showAfterGame("Round complete. Play again or close the room.");
   });
 
   collector.on("end", async (_, reason) => {
@@ -434,8 +492,6 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
     if (!gameEnded && reason !== "crashed") {
       gameEnded = true;
 
-      const currentJackpot = await getJackpot();
-
       const timeoutEmbed = buildEmbed({
         user: interaction.user,
         bet,
@@ -443,21 +499,18 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
         status: "crashed",
         crashPoint: multiplier,
         payout: 0,
-        jackpotAmount: currentJackpot,
+        jackpotAmount: await getJackpot(),
       }).setDescription(
         `You did not cash out in time.\n\nYou lost **${formatOC(bet)} OC**.`
       );
 
-      try {
-        await gameMessage.edit({
-          embeds: [timeoutEmbed],
-          components: [buildCashoutRow(cashoutId, true)],
-        });
-      } catch (error) {
-        console.error("Crash timeout edit error:", error);
-      }
+      await panelMessage.edit({
+        content: `${interaction.user}, round timed out.`,
+        embeds: [timeoutEmbed],
+        components: [],
+      });
 
-      await sendAfterGameMessage("Game timed out. Play again or close the room.");
+      await showAfterGame("Round timed out. Play again or close the room.");
     }
   });
 
@@ -474,8 +527,6 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
       clearGameLoop();
       collector.stop("crashed");
 
-      const currentJackpot = await getJackpot();
-
       const crashEmbed = buildEmbed({
         user: interaction.user,
         bet,
@@ -483,110 +534,35 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
         status: "crashed",
         crashPoint,
         payout: 0,
-        jackpotAmount: currentJackpot,
+        jackpotAmount: await getJackpot(),
       });
 
-      try {
-        await gameMessage.edit({
-          embeds: [crashEmbed],
-          components: [buildCashoutRow(cashoutId, true)],
-        });
-      } catch (error) {
-        console.error("Crash final crash edit error:", error);
-      }
+      await panelMessage.edit({
+        content: `${interaction.user}, crashed.`,
+        embeds: [crashEmbed],
+        components: [],
+      });
 
-      await sendAfterGameMessage("Crashed. Play again or close the room.");
+      await showAfterGame("Crashed. Play again or close the room.");
       return;
     }
 
-    const currentJackpot = await getJackpot();
-
-    const runningEmbed = buildEmbed({
+    const liveEmbed = buildEmbed({
       user: interaction.user,
       bet,
       multiplier,
       status: "running",
       crashPoint,
       payout: 0,
-      jackpotAmount: currentJackpot,
+      jackpotAmount: await getJackpot(),
     });
 
-    await safeEdit(gameMessage, {
-      embeds: [runningEmbed],
+    await safeEdit({
+      content: `${interaction.user}, your Origin Crash game is live.`,
+      embeds: [liveEmbed],
       components: [buildCashoutRow(cashoutId)],
     });
   }, TICK_MS);
-}
-
-async function sendStartPrompt({ gameChannel, interaction, bet }) {
-  const userId = interaction.user.id;
-
-  const startId = `origin_crash_start_${userId}_${Date.now()}`;
-  const closeId = `origin_crash_close_${userId}_${Date.now()}`;
-
-  const jackpotAmount = await getJackpot();
-
-  const waitingEmbed = buildEmbed({
-    user: interaction.user,
-    bet,
-    multiplier: 1,
-    status: "waiting",
-    crashPoint: 0,
-    payout: 0,
-    jackpotAmount,
-  });
-
-  const startMessage = await gameChannel.send({
-    content: `${interaction.user}, press **Start Crash** when you are ready.`,
-    embeds: [waitingEmbed],
-    components: [buildStartRow(startId, closeId)],
-  });
-
-  const startCollector = startMessage.createMessageComponentCollector({
-    time: ROOM_CLOSE_DELAY,
-  });
-
-  startCollector.on("collect", async (buttonInteraction) => {
-    if (buttonInteraction.user.id !== userId) {
-      return buttonInteraction.reply({
-        content: "This is not your Origin game room.",
-        flags: MessageFlags.Ephemeral,
-      });
-    }
-
-    if (buttonInteraction.customId === closeId) {
-      await buttonInteraction.update({
-        content: "Closing this private room now.",
-        embeds: [],
-        components: [],
-      });
-
-      deleteGameRoom(gameChannel, 1000);
-      return;
-    }
-
-    if (buttonInteraction.customId === startId) {
-      await buttonInteraction.update({
-        content: `Starting Origin Crash with bet: **${formatOC(bet)} OC**.`,
-        embeds: [],
-        components: [],
-      });
-
-      startCollector.stop("started");
-
-      await runCrashRound({
-        gameChannel,
-        interaction,
-        bet,
-      });
-    }
-  });
-
-  startCollector.on("end", async (_, reason) => {
-    if (reason !== "started") {
-      deleteGameRoom(gameChannel, 1000);
-    }
-  });
 }
 
 module.exports = {
@@ -609,18 +585,6 @@ module.exports = {
 
     const userId = interaction.user.id;
     const bet = interaction.options.getInteger("bet");
-
-    if (bet < MIN_BET) {
-      return interaction.editReply({
-        content: `Minimum crash bet is **${MIN_BET} OC**.`,
-      });
-    }
-
-    if (bet > MAX_BET) {
-      return interaction.editReply({
-        content: `Maximum crash bet is **${formatOC(MAX_BET)} OC**.`,
-      });
-    }
 
     const balance = await getBalance(userId);
 
@@ -646,8 +610,12 @@ module.exports = {
       components: [buildGoToRoomRow(gameChannel.url)],
     });
 
-    await sendStartPrompt({
-      gameChannel,
+    const panelMessage = await gameChannel.send({
+      content: `${interaction.user}, loading your Origin Crash table...`,
+    });
+
+    await showWaitingPanel({
+      panelMessage,
       interaction,
       bet,
     });
