@@ -4,535 +4,479 @@ const {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
 } = require("discord.js");
 
-const pool = require("../db/pool");
-const { BRAND, formatCurrency, originLine } = require("../config/brand");
-const { addToJackpot, rollJackpotWin, payJackpot } = require("../utils/jackpot");
+const { Pool } = require("pg");
+const { createGameRoom, deleteGameRoom } = require("../utils/gameRooms");
 
-const activeCrashGames = new Set();
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+});
 
 const MIN_BET = 10;
 const MAX_BET = 20000;
-const GAME_TICK_MS = 1000;
-const START_DELAY_MS = 1500;
-const MAX_GAME_TIME_MS = 30000;
+const TICK_MS = 900;
 
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function formatOC(amount) {
+  return Number(amount || 0).toLocaleString("en-GB");
 }
 
-function randomCrashPoint() {
+function makeCrashPoint() {
   const roll = Math.random();
 
-  if (roll < 0.15) return Number((1.25 + Math.random() * 0.45).toFixed(2));
-  if (roll < 0.45) return Number((1.70 + Math.random() * 0.90).toFixed(2));
-  if (roll < 0.70) return Number((2.60 + Math.random() * 2.20).toFixed(2));
-  if (roll < 0.88) return Number((4.80 + Math.random() * 4.70).toFixed(2));
-  if (roll < 0.97) return Number((9.50 + Math.random() * 9.50).toFixed(2));
+  if (roll < 0.45) return +(1 + Math.random() * 0.8).toFixed(2);
+  if (roll < 0.8) return +(1.8 + Math.random() * 1.7).toFixed(2);
+  if (roll < 0.95) return +(3.5 + Math.random() * 4).toFixed(2);
 
-  return Number((19.00 + Math.random() * 21.00).toFixed(2));
+  return +(7.5 + Math.random() * 8).toFixed(2);
 }
 
-function getMultiplier(elapsedMs) {
-  const seconds = elapsedMs / 1000;
-  return Number((1 + seconds * 0.16 + Math.pow(seconds, 1.25) * 0.035).toFixed(2));
+async function ensureUser(discordId) {
+  await pool.query(
+    `INSERT INTO users (discord_id, eggs)
+     VALUES ($1, 0)
+     ON CONFLICT (discord_id) DO NOTHING`,
+    [discordId]
+  );
 }
 
-function makeBar(multiplier, crashPoint, status) {
-  const blocks = 18;
-  const ratio = Math.min(multiplier / Math.max(crashPoint, 2), 1);
-  const filled = Math.max(1, Math.floor(ratio * blocks));
-  const empty = blocks - filled;
+async function getBalance(discordId) {
+  await ensureUser(discordId);
 
-  if (status === "crashed") return "■".repeat(filled) + "□".repeat(empty);
-  return "◆".repeat(filled) + "◇".repeat(empty);
+  const result = await pool.query(
+    `SELECT eggs FROM users WHERE discord_id = $1`,
+    [discordId]
+  );
+
+  return Number(result.rows[0]?.eggs || 0);
 }
 
-function makeButtons(userId, state = "playing") {
-  if (state === "playing") {
-    return [
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId(`crash_cashout_${userId}`)
-          .setLabel("Cash Out")
-          .setStyle(ButtonStyle.Success)
-      ),
-    ];
+async function addCoins(discordId, amount) {
+  await ensureUser(discordId);
+
+  await pool.query(
+    `UPDATE users
+     SET eggs = eggs + $2
+     WHERE discord_id = $1`,
+    [discordId, amount]
+  );
+}
+
+async function removeCoins(discordId, amount) {
+  await ensureUser(discordId);
+
+  await pool.query(
+    `UPDATE users
+     SET eggs = eggs - $2
+     WHERE discord_id = $1`,
+    [discordId, amount]
+  );
+}
+
+async function ensureJackpotTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS jackpot (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      amount BIGINT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    INSERT INTO jackpot (id, amount)
+    VALUES (1, 0)
+    ON CONFLICT (id) DO NOTHING
+  `);
+}
+
+async function addToJackpot(amount) {
+  await ensureJackpotTable();
+
+  await pool.query(
+    `UPDATE jackpot
+     SET amount = amount + $1,
+         updated_at = NOW()
+     WHERE id = 1`,
+    [amount]
+  );
+}
+
+async function getJackpot() {
+  await ensureJackpotTable();
+
+  const result = await pool.query(`SELECT amount FROM jackpot WHERE id = 1`);
+  return Number(result.rows[0]?.amount || 0);
+}
+
+async function resetJackpot() {
+  await ensureJackpotTable();
+
+  await pool.query(
+    `UPDATE jackpot
+     SET amount = 0,
+         updated_at = NOW()
+     WHERE id = 1`
+  );
+}
+
+async function tryWinJackpot(discordId) {
+  const jackpotAmount = await getJackpot();
+
+  if (jackpotAmount <= 0) {
+    return { won: false, amount: 0 };
   }
 
-  return [
-    new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(`crash_again_${userId}`)
-        .setLabel("Play Again")
-        .setStyle(ButtonStyle.Primary),
-      new ButtonBuilder()
-        .setCustomId(`crash_done_${userId}`)
-        .setLabel("Done")
-        .setStyle(ButtonStyle.Secondary)
-    ),
-  ];
-}
+  const roll = Math.random();
 
-function makeEmbed({
-  bet,
-  multiplier,
-  potentialWin,
-  status,
-  winnings = 0,
-  balance = null,
-  countdown = null,
-  jackpotWin = 0,
-}) {
-  let color = BRAND.colour;
-  let title = "Origin Crash";
-  let headline = `**${multiplier.toFixed(2)}x**`;
-  let resultText = "Cash out before the market collapses.";
+  if (roll <= 0.01) {
+    await addCoins(discordId, jackpotAmount);
+    await resetJackpot();
 
-  if (status === "starting") {
-    color = 0x3b82f6;
-    title = "Origin Crash Starting";
-    headline = `Starting in **${countdown}**`;
-    resultText = "Prepare your position.";
+    return {
+      won: true,
+      amount: jackpotAmount,
+    };
   }
 
-  if (status === "cashed") {
-    color = 0x22c55e;
-    title = jackpotWin > 0 ? "Origin Jackpot Cashout" : "Cashed Out";
-    resultText = jackpotWin > 0
-      ? `You won **${formatCurrency(winnings)}**, including a jackpot of **${formatCurrency(jackpotWin)}**.`
-      : `You won **${formatCurrency(winnings)}**.`;
+  return {
+    won: false,
+    amount: jackpotAmount,
+  };
+}
+
+function buildEmbed({ user, bet, multiplier, status, crashPoint, payout, jackpotAmount }) {
+  let description = "";
+  let color = 0x111111;
+
+  if (status === "running") {
+    color = 0xd4af37;
+    description =
+      `The Origin rocket is climbing.\n\n` +
+      `Multiplier: **${multiplier.toFixed(2)}x**\n` +
+      `Potential Cashout: **${formatOC(Math.floor(bet * multiplier))} OC**`;
   }
 
   if (status === "crashed") {
-    color = 0xef4444;
-    title = "Crashed";
-    resultText = `You lost **${formatCurrency(bet)}**.`;
+    color = 0x8b0000;
+    description =
+      `The game crashed at **${crashPoint.toFixed(2)}x**.\n\n` +
+      `You lost **${formatOC(bet)} OC**.`;
   }
 
-  let description =
-    `${originLine()}\n` +
-    `${headline}\n\n` +
-    `${makeBar(multiplier, multiplier + 1, status)}\n\n` +
-    `**Bet:** ${formatCurrency(bet)}\n` +
-    `**Cashout Value:** ${formatCurrency(potentialWin)}\n\n` +
-    `${resultText}`;
-
-  if (balance !== null) {
-    description += `\n\n**Balance:** ${formatCurrency(balance)}`;
+  if (status === "cashed") {
+    color = 0xd4af37;
+    description =
+      `You cashed out at **${multiplier.toFixed(2)}x**.\n\n` +
+      `You won **${formatOC(payout)} OC**.`;
   }
-
-  description += `\n${originLine()}`;
 
   return new EmbedBuilder()
+    .setTitle("ORIGIN CRASH")
     .setColor(color)
-    .setTitle(title)
     .setDescription(description)
-    .setFooter({ text: `${BRAND.fullName} • Crash` });
-}
-
-function buildJackpotAnnouncement(interaction, jackpotWin) {
-  return new EmbedBuilder()
-    .setTitle("ORIGIN JACKPOT HIT")
-    .setDescription(
-      [
-        originLine(),
-        `${interaction.user} claimed the Origin Jackpot through Crash.`,
-        "",
-        `**${formatCurrency(jackpotWin)}**`,
-        originLine()
-      ].join("\n")
+    .addFields(
+      {
+        name: "Player",
+        value: `${user}`,
+        inline: true,
+      },
+      {
+        name: "Bet",
+        value: `${formatOC(bet)} OC`,
+        inline: true,
+      },
+      {
+        name: "Jackpot",
+        value: `${formatOC(jackpotAmount)} OC`,
+        inline: true,
+      }
     )
-    .setColor(BRAND.colour)
-    .setFooter({ text: `${BRAND.fullName} • Global Jackpot` });
+    .setFooter({
+      text: "Origin Casino • Private game room",
+    })
+    .setTimestamp();
 }
 
-async function getUserBalance(userId) {
-  const result = await pool.query(
-    "SELECT eggs FROM users WHERE discord_id = $1",
-    [userId]
+function buildCashoutRow(customId, disabled = false) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(customId)
+      .setLabel(disabled ? "Game Ended" : "Cash Out")
+      .setStyle(disabled ? ButtonStyle.Secondary : ButtonStyle.Success)
+      .setDisabled(disabled)
   );
-
-  return Number(result.rows[0]?.eggs || 0);
-}
-
-async function removeBet(userId, username, bet) {
-  const result = await pool.query(
-    `
-    UPDATE users
-    SET eggs = eggs - $1,
-        username = $2
-    WHERE discord_id = $3
-    AND eggs >= $1
-    RETURNING eggs
-    `,
-    [bet, username, userId]
-  );
-
-  return result.rows[0] ? Number(result.rows[0].eggs) : null;
-}
-
-async function addWinnings(userId, username, amount) {
-  const result = await pool.query(
-    `
-    UPDATE users
-    SET eggs = eggs + $1,
-        username = $2
-    WHERE discord_id = $3
-    RETURNING eggs
-    `,
-    [amount, username, userId]
-  );
-
-  return Number(result.rows[0]?.eggs || 0);
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("crash")
-    .setDescription("Play Origin Crash.")
+    .setDescription("Play Origin Crash in a private game room")
     .addIntegerOption((option) =>
       option
         .setName("bet")
         .setDescription("Amount of Origin Coins to bet")
         .setRequired(true)
+        .setMinValue(MIN_BET)
+        .setMaxValue(MAX_BET)
     ),
 
   async execute(interaction) {
+    await interaction.deferReply({
+      flags: MessageFlags.Ephemeral,
+    });
+
     const userId = interaction.user.id;
-    const username = interaction.user.username;
-    const originalBet = interaction.options.getInteger("bet");
+    const bet = interaction.options.getInteger("bet");
 
-    if (originalBet < MIN_BET || originalBet > MAX_BET) {
-      return interaction.reply({
-        content: `Bet must be between ${formatCurrency(MIN_BET)} and ${formatCurrency(MAX_BET)}.`,
-        ephemeral: true,
+    if (bet < MIN_BET) {
+      return interaction.editReply({
+        content: `Minimum crash bet is **${MIN_BET} OC**.`,
       });
     }
 
-    if (activeCrashGames.has(userId)) {
-      return interaction.reply({
-        content: "You already have an Origin Crash game running.",
-        ephemeral: true,
+    if (bet > MAX_BET) {
+      return interaction.editReply({
+        content: `Maximum crash bet is **${formatOC(MAX_BET)} OC**.`,
       });
     }
 
-    activeCrashGames.add(userId);
+    const balance = await getBalance(userId);
 
-    let currentBet = originalBet;
-    let message = null;
-    let collector = null;
-    let gameInterval = null;
-    let gameOver = false;
-    let gameStarted = false;
-    let startTime = null;
-    let crashPoint = null;
+    if (balance < bet) {
+      return interaction.editReply({
+        content: `You do not have enough Origin Coins. Your balance is **${formatOC(balance)} OC**.`,
+      });
+    }
+
+    const roomResult = await createGameRoom(interaction, "crash");
+
+    if (roomResult.alreadyExists) {
+      return interaction.editReply({
+        content: `You already have an active Origin game room: ${roomResult.channel}`,
+      });
+    }
+
+    const gameChannel = roomResult.channel;
+
+    await interaction.editReply({
+      content: `Your private Origin Crash room is ready: ${gameChannel}`,
+    });
+
+    await removeCoins(userId, bet);
+
+    const jackpotFeed = Math.max(1, Math.floor(bet * 0.05));
+    await addToJackpot(jackpotFeed);
+
+    const crashPoint = makeCrashPoint();
+
+    let multiplier = 1.0;
+    let gameEnded = false;
     let editLocked = false;
+    let gameLoop = null;
 
-    function clearGameLoop() {
-      if (gameInterval) clearInterval(gameInterval);
-      gameInterval = null;
-    }
+    const customId = `origin_crash_cashout_${userId}_${Date.now()}`;
 
-    function endActiveGame() {
-      clearGameLoop();
-      activeCrashGames.delete(userId);
-    }
+    const clearGameLoop = () => {
+      if (gameLoop) {
+        clearInterval(gameLoop);
+        gameLoop = null;
+      }
+    };
 
-    async function safeEdit(payload) {
-      if (!message || editLocked || gameOver) return;
+    const safeEdit = async (message, payload) => {
+      if (editLocked || gameEnded) return;
 
       editLocked = true;
 
       try {
         await message.edit(payload);
       } catch (error) {
-        if (error.code !== 10008) {
-          console.error("Crash edit error:", error);
-        }
+        console.error("Crash safeEdit error:", error);
       } finally {
         editLocked = false;
       }
-    }
+    };
 
-    async function finishAsCrash(multiplierValue) {
-      if (gameOver) return;
+    const jackpotAmount = await getJackpot();
 
-      gameOver = true;
-      gameStarted = false;
-      clearGameLoop();
+    const startEmbed = buildEmbed({
+      user: interaction.user,
+      bet,
+      multiplier,
+      status: "running",
+      crashPoint,
+      payout: 0,
+      jackpotAmount,
+    });
 
-      const balance = await getUserBalance(userId);
+    const gameMessage = await gameChannel.send({
+      content: `${interaction.user}, your Origin Crash game has started.`,
+      embeds: [startEmbed],
+      components: [buildCashoutRow(customId)],
+    });
 
-      await message.edit({
-        embeds: [
-          makeEmbed({
-            bet: currentBet,
-            multiplier: multiplierValue,
-            potentialWin: 0,
-            status: "crashed",
-            balance,
-          }),
-        ],
-        components: makeButtons(userId, "ended"),
-      }).catch(() => null);
-    }
+    const collector = gameMessage.createMessageComponentCollector({
+      time: 30000,
+    });
 
-    async function startRound() {
-      clearGameLoop();
+    collector.on("collect", async (buttonInteraction) => {
+      if (buttonInteraction.customId !== customId) return;
 
-      gameOver = false;
-      gameStarted = false;
-      startTime = null;
-      crashPoint = randomCrashPoint();
-
-      const currentBalance = await getUserBalance(userId);
-
-      if (currentBalance < currentBet) {
-        endActiveGame();
-
-        if (message) {
-          await message.edit({
-            content: `You only have ${formatCurrency(currentBalance)}. You need ${formatCurrency(currentBet)} to play again.`,
-            embeds: [],
-            components: [],
-          }).catch(() => null);
-        }
-
-        return;
+      if (buttonInteraction.user.id !== userId) {
+        return buttonInteraction.reply({
+          content: "This is not your Origin Crash game.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
-      const balanceAfterBet = await removeBet(userId, username, currentBet);
-
-      if (balanceAfterBet === null) {
-        endActiveGame();
-
-        if (message) {
-          await message.edit({
-            content: "You do not have enough Origin Coins for that bet.",
-            embeds: [],
-            components: [],
-          }).catch(() => null);
-        }
-
-        return;
+      if (gameEnded) {
+        return buttonInteraction.reply({
+          content: "This crash game has already ended.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
-      await addToJackpot(
-        Math.floor(currentBet * 0.05),
-        userId,
-        username,
-        "crash_bet"
-      );
+      gameEnded = true;
+      clearGameLoop();
+      collector.stop("cashed");
 
-      const startingEmbed = makeEmbed({
-        bet: currentBet,
-        multiplier: 1.0,
-        potentialWin: currentBet,
-        status: "starting",
-        countdown: 2,
+      const payout = Math.floor(bet * multiplier);
+      await addCoins(userId, payout);
+
+      const jackpotResult = await tryWinJackpot(userId);
+      const newJackpotAmount = await getJackpot();
+
+      let finalDescription =
+        `You cashed out at **${multiplier.toFixed(2)}x**.\n\n` +
+        `You won **${formatOC(payout)} OC**.`;
+
+      if (jackpotResult.won) {
+        finalDescription += `\n\nYou also hit the **Origin Jackpot** and won **${formatOC(jackpotResult.amount)} OC**.`;
+      }
+
+      const finalEmbed = buildEmbed({
+        user: interaction.user,
+        bet,
+        multiplier,
+        status: "cashed",
+        crashPoint,
+        payout,
+        jackpotAmount: newJackpotAmount,
+      }).setDescription(finalDescription);
+
+      try {
+        await buttonInteraction.update({
+          embeds: [finalEmbed],
+          components: [buildCashoutRow(customId, true)],
+        });
+      } catch (error) {
+        console.error("Crash cashout update error:", error);
+      }
+
+      await gameChannel.send({
+        content: `Game complete. This private room will close shortly.`,
       });
 
-      if (!message) {
-        await interaction.reply({
-          embeds: [startingEmbed],
-          components: [],
-        });
+      deleteGameRoom(gameChannel, 15000);
+    });
 
-        message = await interaction.fetchReply();
+    collector.on("end", async (_, reason) => {
+      clearGameLoop();
 
-        collector = message.createMessageComponentCollector({
-          time: 15 * 60 * 1000,
-        });
+      if (!gameEnded && reason !== "crashed") {
+        gameEnded = true;
 
-        collector.on("collect", async (buttonInteraction) => {
-          try {
-            if (buttonInteraction.user.id !== userId) {
-              return buttonInteraction.reply({
-                content: "This is not your Origin Crash game.",
-                ephemeral: true,
-              });
-            }
+        const currentJackpot = await getJackpot();
 
-            if (buttonInteraction.customId === `crash_done_${userId}`) {
-              await buttonInteraction.deferUpdate();
+        const timeoutEmbed = buildEmbed({
+          user: interaction.user,
+          bet,
+          multiplier,
+          status: "crashed",
+          crashPoint: multiplier,
+          payout: 0,
+          jackpotAmount: currentJackpot,
+        }).setDescription(
+          `You did not cash out in time.\n\nYou lost **${formatOC(bet)} OC**.`
+        );
 
-              if (collector) collector.stop("done");
-
-              gameOver = true;
-              gameStarted = false;
-              endActiveGame();
-
-              await message.edit({
-                components: [],
-              }).catch(() => null);
-
-              return;
-            }
-
-            if (buttonInteraction.customId === `crash_again_${userId}`) {
-              await buttonInteraction.deferUpdate();
-
-              if (!gameOver) return;
-              await startRound();
-              return;
-            }
-
-            if (buttonInteraction.customId !== `crash_cashout_${userId}`) return;
-
-            if (!gameStarted || gameOver) {
-              return buttonInteraction.deferUpdate().catch(() => null);
-            }
-
-            gameOver = true;
-            gameStarted = false;
-            clearGameLoop();
-
-            const elapsed = Date.now() - startTime;
-            const cashMultiplier = getMultiplier(elapsed);
-
-            if (cashMultiplier >= crashPoint) {
-              const balance = await getUserBalance(userId);
-
-              return buttonInteraction.update({
-                embeds: [
-                  makeEmbed({
-                    bet: currentBet,
-                    multiplier: crashPoint,
-                    potentialWin: 0,
-                    status: "crashed",
-                    balance,
-                  }),
-                ],
-                components: makeButtons(userId, "ended"),
-              }).catch(() => null);
-            }
-
-            let jackpotWin = 0;
-            let winnings = Math.floor(currentBet * cashMultiplier);
-
-            if (await rollJackpotWin(0.25)) {
-              jackpotWin = await payJackpot(userId, username);
-
-              if (jackpotWin > 0) {
-                winnings += jackpotWin;
-              }
-            }
-
-            const balance = await addWinnings(userId, username, winnings);
-
-            await buttonInteraction.update({
-              embeds: [
-                makeEmbed({
-                  bet: currentBet,
-                  multiplier: cashMultiplier,
-                  potentialWin: winnings,
-                  status: "cashed",
-                  winnings,
-                  balance,
-                  jackpotWin,
-                }),
-              ],
-              components: makeButtons(userId, "ended"),
-            }).catch(() => null);
-
-            if (jackpotWin > 0) {
-              await interaction.followUp({
-                embeds: [buildJackpotAnnouncement(interaction, jackpotWin)]
-              });
-            }
-          } catch (err) {
-            console.error("Crash button error:", err);
-            gameOver = true;
-            gameStarted = false;
-            endActiveGame();
-
-            if (!buttonInteraction.replied && !buttonInteraction.deferred) {
-              await buttonInteraction.reply({
-                content: "Crash action failed.",
-                ephemeral: true,
-              }).catch(() => null);
-            }
-          }
-        });
-
-        collector.on("end", () => {
-          gameOver = true;
-          gameStarted = false;
-          endActiveGame();
-        });
-      } else {
-        await message.edit({
-          embeds: [startingEmbed],
-          components: [],
-        }).catch(() => null);
-      }
-
-      await wait(START_DELAY_MS);
-
-      if (gameOver) return;
-
-      gameStarted = true;
-      startTime = Date.now();
-
-      await message.edit({
-        embeds: [
-          makeEmbed({
-            bet: currentBet,
-            multiplier: 1.0,
-            potentialWin: currentBet,
-            status: "playing",
-          }),
-        ],
-        components: makeButtons(userId, "playing"),
-      }).catch(() => null);
-
-      gameInterval = setInterval(async () => {
-        if (gameOver || !gameStarted) {
-          clearGameLoop();
-          return;
+        try {
+          await gameMessage.edit({
+            embeds: [timeoutEmbed],
+            components: [buildCashoutRow(customId, true)],
+          });
+        } catch (error) {
+          console.error("Crash timeout edit error:", error);
         }
 
-        const elapsed = Date.now() - startTime;
-        const multiplier = getMultiplier(elapsed);
-
-        if (elapsed >= MAX_GAME_TIME_MS || multiplier >= crashPoint) {
-          await finishAsCrash(crashPoint);
-          return;
-        }
-
-        await safeEdit({
-          embeds: [
-            makeEmbed({
-              bet: currentBet,
-              multiplier,
-              potentialWin: Math.floor(currentBet * multiplier),
-              status: "playing",
-            }),
-          ],
-          components: makeButtons(userId, "playing"),
+        await gameChannel.send({
+          content: `Game timed out. This private room will close shortly.`,
         });
-      }, GAME_TICK_MS);
-    }
 
-    try {
-      await startRound();
-    } catch (err) {
-      console.error("Crash command error:", err);
-      endActiveGame();
+        deleteGameRoom(gameChannel, 15000);
+      }
+    });
 
-      if (interaction.replied || interaction.deferred) {
-        return interaction.followUp({
-          content: "Origin Crash failed.",
-          ephemeral: true,
-        }).catch(() => null);
+    gameLoop = setInterval(async () => {
+      if (gameEnded) {
+        clearGameLoop();
+        return;
       }
 
-      return interaction.reply({
-        content: "Origin Crash failed.",
-        ephemeral: true,
-      }).catch(() => null);
-    }
+      multiplier = +(multiplier + 0.12 + Math.random() * 0.16).toFixed(2);
+
+      if (multiplier >= crashPoint) {
+        gameEnded = true;
+        clearGameLoop();
+        collector.stop("crashed");
+
+        const currentJackpot = await getJackpot();
+
+        const crashEmbed = buildEmbed({
+          user: interaction.user,
+          bet,
+          multiplier: crashPoint,
+          status: "crashed",
+          crashPoint,
+          payout: 0,
+          jackpotAmount: currentJackpot,
+        });
+
+        try {
+          await gameMessage.edit({
+            embeds: [crashEmbed],
+            components: [buildCashoutRow(customId, true)],
+          });
+        } catch (error) {
+          console.error("Crash final crash edit error:", error);
+        }
+
+        await gameChannel.send({
+          content: `Crashed. This private room will close shortly.`,
+        });
+
+        deleteGameRoom(gameChannel, 15000);
+        return;
+      }
+
+      const currentJackpot = await getJackpot();
+
+      const runningEmbed = buildEmbed({
+        user: interaction.user,
+        bet,
+        multiplier,
+        status: "running",
+        crashPoint,
+        payout: 0,
+        jackpotAmount: currentJackpot,
+      });
+
+      await safeEdit(gameMessage, {
+        embeds: [runningEmbed],
+        components: [buildCashoutRow(customId)],
+      });
+    }, TICK_MS);
   },
 };
