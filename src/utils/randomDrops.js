@@ -12,6 +12,9 @@ const DROP_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const DROP_CLAIM_WINDOW_MS = 30 * 60 * 1000;
 const DELETE_AFTER_CLAIM_MS = 20 * 1000;
 
+let nextDropAt = null;
+let dropTimeout = null;
+
 const DROPS = [
   {
     id: "chip_jackpot_small",
@@ -75,6 +78,18 @@ function getColorByRarity(rarity) {
   if (rarity === "Epic") return 0x8b5cf6;
   if (rarity === "Rare") return 0x3b82f6;
   return 0x8a8a8a;
+}
+
+function getNextDropCountdown() {
+  if (!nextDropAt) return "Not scheduled";
+
+  const remaining = Math.max(0, nextDropAt - Date.now());
+
+  const hours = Math.floor(remaining / 1000 / 60 / 60);
+  const minutes = Math.floor((remaining / 1000 / 60) % 60);
+  const seconds = Math.floor((remaining / 1000) % 60);
+
+  return `${hours}h ${minutes}m ${seconds}s`;
 }
 
 function rollDrop() {
@@ -301,19 +316,30 @@ async function sendRandomDrop(client) {
   });
 }
 
+function scheduleNextDrop(client) {
+  if (dropTimeout) clearTimeout(dropTimeout);
+
+  nextDropAt = Date.now() + DROP_INTERVAL_MS;
+
+  dropTimeout = setTimeout(async () => {
+    try {
+      await sendRandomDrop(client);
+    } catch (error) {
+      console.error("Scheduled Origin drop failed:", error);
+    }
+
+    scheduleNextDrop(client);
+  }, DROP_INTERVAL_MS);
+}
+
 function startRandomDrops(client) {
   console.log("Origin random drops started. Interval: 4 hours.");
 
-  setTimeout(() => {
-    sendRandomDrop(client);
-  }, 60 * 1000);
-
-  setInterval(() => {
-    sendRandomDrop(client);
-  }, DROP_INTERVAL_MS);
+  scheduleNextDrop(client);
 }
 
 module.exports = {
   startRandomDrops,
-  sendRandomDrop
+  sendRandomDrop,
+  getNextDropCountdown
 };

@@ -8,13 +8,11 @@ const {
 const pool = require("../db/pool");
 const { BRAND, formatCurrency, originLine } = require("../config/brand");
 const { getJackpot } = require("./jackpot");
+const { getNextDropCountdown } = require("./randomDrops");
 
 let panelMessageId = null;
 
 const UPDATE_MS = 60 * 1000;
-const DROP_INTERVAL_MS = 4 * 60 * 60 * 1000;
-
-let nextDropAt = Date.now() + DROP_INTERVAL_MS;
 
 async function getPanelStats() {
   const users = await pool.query("SELECT COUNT(*) FROM users");
@@ -31,14 +29,6 @@ async function getPanelStats() {
     topPlayer: topPlayer.rows[0] || null,
     jackpot
   };
-}
-
-function getDropCountdown() {
-  const remaining = Math.max(0, nextDropAt - Date.now());
-  const hours = Math.floor(remaining / 1000 / 60 / 60);
-  const minutes = Math.floor((remaining / 1000 / 60) % 60);
-
-  return `${hours}h ${minutes}m`;
 }
 
 function buildPanelEmbed(stats) {
@@ -58,7 +48,7 @@ function buildPanelEmbed(stats) {
         `Coins in Circulation: **${formatCurrency(stats.totalCoins)}**`,
         `Origin Jackpot: **${formatCurrency(stats.jackpot)}**`,
         `Top Player: **${topPlayerText}**`,
-        `Next Drop: **${getDropCountdown()}**`,
+        `Next Drop: **${getNextDropCountdown()}**`,
         "",
         "**Systems**",
         "Vault Shop • Vault Opening • Balance • Rules • Leaderboard • Jackpot",
@@ -171,12 +161,7 @@ async function startOriginPanel(client) {
   console.log("Origin live panel started.");
 }
 
-function resetNextDropTimer() {
-  nextDropAt = Date.now() + DROP_INTERVAL_MS;
-}
-
 module.exports = {
   startOriginPanel,
-  postOrUpdateOriginPanel,
-  resetNextDropTimer
+  postOrUpdateOriginPanel
 };
