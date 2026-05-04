@@ -18,6 +18,7 @@ const pool = new Pool({
 const MIN_BET = 10;
 const MAX_BET = 20000;
 const TICK_MS = 900;
+const ROOM_CLOSE_DELAY = 60000;
 
 function formatOC(amount) {
   return Number(amount || 0).toLocaleString("en-GB");
@@ -128,9 +129,7 @@ async function tryWinJackpot(discordId) {
     return { won: false, amount: 0 };
   }
 
-  const roll = Math.random();
-
-  if (roll <= 0.01) {
+  if (Math.random() <= 0.01) {
     await addCoins(discordId, jackpotAmount);
     await resetJackpot();
 
@@ -209,6 +208,293 @@ function buildCashoutRow(customId, disabled = false) {
   );
 }
 
+function buildAfterGameRow(playAgainId, closeId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(playAgainId)
+      .setLabel("Play Again")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(closeId)
+      .setLabel("Close Room")
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
+function buildGoToRoomRow(channelUrl) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel("Go To Game Room")
+      .setStyle(ButtonStyle.Link)
+      .setURL(channelUrl)
+  );
+}
+
+async function runCrashRound({ gameChannel, interaction, bet }) {
+  const userId = interaction.user.id;
+
+  const balance = await getBalance(userId);
+
+  if (balance < bet) {
+    await gameChannel.send({
+      content: `${interaction.user}, you do not have enough OC to play again. Your balance is **${formatOC(balance)} OC**.`,
+    });
+    return;
+  }
+
+  await removeCoins(userId, bet);
+
+  const jackpotFeed = Math.max(1, Math.floor(bet * 0.05));
+  await addToJackpot(jackpotFeed);
+
+  const crashPoint = makeCrashPoint();
+
+  let multiplier = 1.0;
+  let gameEnded = false;
+  let editLocked = false;
+  let gameLoop = null;
+
+  const cashoutId = `origin_crash_cashout_${userId}_${Date.now()}`;
+  const playAgainId = `origin_crash_again_${userId}_${Date.now()}`;
+  const closeId = `origin_crash_close_${userId}_${Date.now()}`;
+
+  const clearGameLoop = () => {
+    if (gameLoop) {
+      clearInterval(gameLoop);
+      gameLoop = null;
+    }
+  };
+
+  const safeEdit = async (message, payload) => {
+    if (editLocked || gameEnded) return;
+
+    editLocked = true;
+
+    try {
+      await message.edit(payload);
+    } catch (error) {
+      console.error("Crash safeEdit error:", error);
+    } finally {
+      editLocked = false;
+    }
+  };
+
+  const jackpotAmount = await getJackpot();
+
+  const startEmbed = buildEmbed({
+    user: interaction.user,
+    bet,
+    multiplier,
+    status: "running",
+    crashPoint,
+    payout: 0,
+    jackpotAmount,
+  });
+
+  const gameMessage = await gameChannel.send({
+    content: `${interaction.user}, your Origin Crash game has started.`,
+    embeds: [startEmbed],
+    components: [buildCashoutRow(cashoutId)],
+  });
+
+  const collector = gameMessage.createMessageComponentCollector({
+    time: 30000,
+  });
+
+  async function sendAfterGameMessage(text) {
+    const afterMessage = await gameChannel.send({
+      content: text,
+      components: [buildAfterGameRow(playAgainId, closeId)],
+    });
+
+    const afterCollector = afterMessage.createMessageComponentCollector({
+      time: ROOM_CLOSE_DELAY,
+    });
+
+    afterCollector.on("collect", async (buttonInteraction) => {
+      if (buttonInteraction.user.id !== userId) {
+        return buttonInteraction.reply({
+          content: "This is not your Origin game room.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (buttonInteraction.customId === closeId) {
+        await buttonInteraction.update({
+          content: "Closing this private room now.",
+          components: [],
+        });
+
+        deleteGameRoom(gameChannel, 1000);
+        return;
+      }
+
+      if (buttonInteraction.customId === playAgainId) {
+        await buttonInteraction.update({
+          content: `Starting another Origin Crash round with the same bet: **${formatOC(bet)} OC**.`,
+          components: [],
+        });
+
+        await runCrashRound({
+          gameChannel,
+          interaction,
+          bet,
+        });
+      }
+    });
+
+    afterCollector.on("end", async () => {
+      deleteGameRoom(gameChannel, 1000);
+    });
+  }
+
+  collector.on("collect", async (buttonInteraction) => {
+    if (buttonInteraction.customId !== cashoutId) return;
+
+    if (buttonInteraction.user.id !== userId) {
+      return buttonInteraction.reply({
+        content: "This is not your Origin Crash game.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (gameEnded) {
+      return buttonInteraction.reply({
+        content: "This crash game has already ended.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    gameEnded = true;
+    clearGameLoop();
+    collector.stop("cashed");
+
+    const payout = Math.floor(bet * multiplier);
+    await addCoins(userId, payout);
+
+    const jackpotResult = await tryWinJackpot(userId);
+    const newJackpotAmount = await getJackpot();
+
+    let finalDescription =
+      `You cashed out at **${multiplier.toFixed(2)}x**.\n\n` +
+      `You won **${formatOC(payout)} OC**.`;
+
+    if (jackpotResult.won) {
+      finalDescription += `\n\nYou also hit the **Origin Jackpot** and won **${formatOC(jackpotResult.amount)} OC**.`;
+    }
+
+    const finalEmbed = buildEmbed({
+      user: interaction.user,
+      bet,
+      multiplier,
+      status: "cashed",
+      crashPoint,
+      payout,
+      jackpotAmount: newJackpotAmount,
+    }).setDescription(finalDescription);
+
+    try {
+      await buttonInteraction.update({
+        embeds: [finalEmbed],
+        components: [buildCashoutRow(cashoutId, true)],
+      });
+    } catch (error) {
+      console.error("Crash cashout update error:", error);
+    }
+
+    await sendAfterGameMessage("Game complete. Play again or close the room.");
+  });
+
+  collector.on("end", async (_, reason) => {
+    clearGameLoop();
+
+    if (!gameEnded && reason !== "crashed") {
+      gameEnded = true;
+
+      const currentJackpot = await getJackpot();
+
+      const timeoutEmbed = buildEmbed({
+        user: interaction.user,
+        bet,
+        multiplier,
+        status: "crashed",
+        crashPoint: multiplier,
+        payout: 0,
+        jackpotAmount: currentJackpot,
+      }).setDescription(
+        `You did not cash out in time.\n\nYou lost **${formatOC(bet)} OC**.`
+      );
+
+      try {
+        await gameMessage.edit({
+          embeds: [timeoutEmbed],
+          components: [buildCashoutRow(cashoutId, true)],
+        });
+      } catch (error) {
+        console.error("Crash timeout edit error:", error);
+      }
+
+      await sendAfterGameMessage("Game timed out. Play again or close the room.");
+    }
+  });
+
+  gameLoop = setInterval(async () => {
+    if (gameEnded) {
+      clearGameLoop();
+      return;
+    }
+
+    multiplier = +(multiplier + 0.12 + Math.random() * 0.16).toFixed(2);
+
+    if (multiplier >= crashPoint) {
+      gameEnded = true;
+      clearGameLoop();
+      collector.stop("crashed");
+
+      const currentJackpot = await getJackpot();
+
+      const crashEmbed = buildEmbed({
+        user: interaction.user,
+        bet,
+        multiplier: crashPoint,
+        status: "crashed",
+        crashPoint,
+        payout: 0,
+        jackpotAmount: currentJackpot,
+      });
+
+      try {
+        await gameMessage.edit({
+          embeds: [crashEmbed],
+          components: [buildCashoutRow(cashoutId, true)],
+        });
+      } catch (error) {
+        console.error("Crash final crash edit error:", error);
+      }
+
+      await sendAfterGameMessage("Crashed. Play again or close the room.");
+      return;
+    }
+
+    const currentJackpot = await getJackpot();
+
+    const runningEmbed = buildEmbed({
+      user: interaction.user,
+      bet,
+      multiplier,
+      status: "running",
+      crashPoint,
+      payout: 0,
+      jackpotAmount: currentJackpot,
+    });
+
+    await safeEdit(gameMessage, {
+      embeds: [runningEmbed],
+      components: [buildCashoutRow(cashoutId)],
+    });
+  }, TICK_MS);
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("crash")
@@ -255,6 +541,7 @@ module.exports = {
     if (roomResult.alreadyExists) {
       return interaction.editReply({
         content: `You already have an active Origin game room: ${roomResult.channel}`,
+        components: [buildGoToRoomRow(roomResult.channel.url)],
       });
     }
 
@@ -262,221 +549,13 @@ module.exports = {
 
     await interaction.editReply({
       content: `Your private Origin Crash room is ready: ${gameChannel}`,
+      components: [buildGoToRoomRow(gameChannel.url)],
     });
 
-    await removeCoins(userId, bet);
-
-    const jackpotFeed = Math.max(1, Math.floor(bet * 0.05));
-    await addToJackpot(jackpotFeed);
-
-    const crashPoint = makeCrashPoint();
-
-    let multiplier = 1.0;
-    let gameEnded = false;
-    let editLocked = false;
-    let gameLoop = null;
-
-    const customId = `origin_crash_cashout_${userId}_${Date.now()}`;
-
-    const clearGameLoop = () => {
-      if (gameLoop) {
-        clearInterval(gameLoop);
-        gameLoop = null;
-      }
-    };
-
-    const safeEdit = async (message, payload) => {
-      if (editLocked || gameEnded) return;
-
-      editLocked = true;
-
-      try {
-        await message.edit(payload);
-      } catch (error) {
-        console.error("Crash safeEdit error:", error);
-      } finally {
-        editLocked = false;
-      }
-    };
-
-    const jackpotAmount = await getJackpot();
-
-    const startEmbed = buildEmbed({
-      user: interaction.user,
+    await runCrashRound({
+      gameChannel,
+      interaction,
       bet,
-      multiplier,
-      status: "running",
-      crashPoint,
-      payout: 0,
-      jackpotAmount,
     });
-
-    const gameMessage = await gameChannel.send({
-      content: `${interaction.user}, your Origin Crash game has started.`,
-      embeds: [startEmbed],
-      components: [buildCashoutRow(customId)],
-    });
-
-    const collector = gameMessage.createMessageComponentCollector({
-      time: 30000,
-    });
-
-    collector.on("collect", async (buttonInteraction) => {
-      if (buttonInteraction.customId !== customId) return;
-
-      if (buttonInteraction.user.id !== userId) {
-        return buttonInteraction.reply({
-          content: "This is not your Origin Crash game.",
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-
-      if (gameEnded) {
-        return buttonInteraction.reply({
-          content: "This crash game has already ended.",
-          flags: MessageFlags.Ephemeral,
-        });
-      }
-
-      gameEnded = true;
-      clearGameLoop();
-      collector.stop("cashed");
-
-      const payout = Math.floor(bet * multiplier);
-      await addCoins(userId, payout);
-
-      const jackpotResult = await tryWinJackpot(userId);
-      const newJackpotAmount = await getJackpot();
-
-      let finalDescription =
-        `You cashed out at **${multiplier.toFixed(2)}x**.\n\n` +
-        `You won **${formatOC(payout)} OC**.`;
-
-      if (jackpotResult.won) {
-        finalDescription += `\n\nYou also hit the **Origin Jackpot** and won **${formatOC(jackpotResult.amount)} OC**.`;
-      }
-
-      const finalEmbed = buildEmbed({
-        user: interaction.user,
-        bet,
-        multiplier,
-        status: "cashed",
-        crashPoint,
-        payout,
-        jackpotAmount: newJackpotAmount,
-      }).setDescription(finalDescription);
-
-      try {
-        await buttonInteraction.update({
-          embeds: [finalEmbed],
-          components: [buildCashoutRow(customId, true)],
-        });
-      } catch (error) {
-        console.error("Crash cashout update error:", error);
-      }
-
-      await gameChannel.send({
-        content: `Game complete. This private room will close shortly.`,
-      });
-
-      deleteGameRoom(gameChannel, 15000);
-    });
-
-    collector.on("end", async (_, reason) => {
-      clearGameLoop();
-
-      if (!gameEnded && reason !== "crashed") {
-        gameEnded = true;
-
-        const currentJackpot = await getJackpot();
-
-        const timeoutEmbed = buildEmbed({
-          user: interaction.user,
-          bet,
-          multiplier,
-          status: "crashed",
-          crashPoint: multiplier,
-          payout: 0,
-          jackpotAmount: currentJackpot,
-        }).setDescription(
-          `You did not cash out in time.\n\nYou lost **${formatOC(bet)} OC**.`
-        );
-
-        try {
-          await gameMessage.edit({
-            embeds: [timeoutEmbed],
-            components: [buildCashoutRow(customId, true)],
-          });
-        } catch (error) {
-          console.error("Crash timeout edit error:", error);
-        }
-
-        await gameChannel.send({
-          content: `Game timed out. This private room will close shortly.`,
-        });
-
-        deleteGameRoom(gameChannel, 15000);
-      }
-    });
-
-    gameLoop = setInterval(async () => {
-      if (gameEnded) {
-        clearGameLoop();
-        return;
-      }
-
-      multiplier = +(multiplier + 0.12 + Math.random() * 0.16).toFixed(2);
-
-      if (multiplier >= crashPoint) {
-        gameEnded = true;
-        clearGameLoop();
-        collector.stop("crashed");
-
-        const currentJackpot = await getJackpot();
-
-        const crashEmbed = buildEmbed({
-          user: interaction.user,
-          bet,
-          multiplier: crashPoint,
-          status: "crashed",
-          crashPoint,
-          payout: 0,
-          jackpotAmount: currentJackpot,
-        });
-
-        try {
-          await gameMessage.edit({
-            embeds: [crashEmbed],
-            components: [buildCashoutRow(customId, true)],
-          });
-        } catch (error) {
-          console.error("Crash final crash edit error:", error);
-        }
-
-        await gameChannel.send({
-          content: `Crashed. This private room will close shortly.`,
-        });
-
-        deleteGameRoom(gameChannel, 15000);
-        return;
-      }
-
-      const currentJackpot = await getJackpot();
-
-      const runningEmbed = buildEmbed({
-        user: interaction.user,
-        bet,
-        multiplier,
-        status: "running",
-        crashPoint,
-        payout: 0,
-        jackpotAmount: currentJackpot,
-      });
-
-      await safeEdit(gameMessage, {
-        embeds: [runningEmbed],
-        components: [buildCashoutRow(customId)],
-      });
-    }, TICK_MS);
   },
 };
