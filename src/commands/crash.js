@@ -149,6 +149,14 @@ function buildEmbed({ user, bet, multiplier, status, crashPoint, payout, jackpot
   let description = "";
   let color = 0x111111;
 
+  if (status === "waiting") {
+    color = 0xd4af37;
+    description =
+      `Private Origin Crash room created.\n\n` +
+      `Bet: **${formatOC(bet)} OC**\n\n` +
+      `Press **Start Crash** when you are ready.`;
+  }
+
   if (status === "running") {
     color = 0xd4af37;
     description =
@@ -198,6 +206,19 @@ function buildEmbed({ user, bet, multiplier, status, crashPoint, payout, jackpot
     .setTimestamp();
 }
 
+function buildStartRow(startId, closeId) {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(startId)
+      .setLabel("Start Crash")
+      .setStyle(ButtonStyle.Success),
+    new ButtonBuilder()
+      .setCustomId(closeId)
+      .setLabel("Close Room")
+      .setStyle(ButtonStyle.Danger)
+  );
+}
+
 function buildCashoutRow(customId, disabled = false) {
   return new ActionRowBuilder().addComponents(
     new ButtonBuilder()
@@ -237,7 +258,7 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
 
   if (balance < bet) {
     await gameChannel.send({
-      content: `${interaction.user}, you do not have enough OC to play again. Your balance is **${formatOC(balance)} OC**.`,
+      content: `${interaction.user}, you do not have enough OC to play. Your balance is **${formatOC(balance)} OC**.`,
     });
     return;
   }
@@ -335,7 +356,7 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
           components: [],
         });
 
-        await runCrashRound({
+        await sendStartPrompt({
           gameChannel,
           interaction,
           bet,
@@ -343,8 +364,10 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
       }
     });
 
-    afterCollector.on("end", async () => {
-      deleteGameRoom(gameChannel, 1000);
+    afterCollector.on("end", async (_, reason) => {
+      if (reason !== "messageDelete") {
+        deleteGameRoom(gameChannel, 1000);
+      }
     });
   }
 
@@ -495,6 +518,77 @@ async function runCrashRound({ gameChannel, interaction, bet }) {
   }, TICK_MS);
 }
 
+async function sendStartPrompt({ gameChannel, interaction, bet }) {
+  const userId = interaction.user.id;
+
+  const startId = `origin_crash_start_${userId}_${Date.now()}`;
+  const closeId = `origin_crash_close_${userId}_${Date.now()}`;
+
+  const jackpotAmount = await getJackpot();
+
+  const waitingEmbed = buildEmbed({
+    user: interaction.user,
+    bet,
+    multiplier: 1,
+    status: "waiting",
+    crashPoint: 0,
+    payout: 0,
+    jackpotAmount,
+  });
+
+  const startMessage = await gameChannel.send({
+    content: `${interaction.user}, press **Start Crash** when you are ready.`,
+    embeds: [waitingEmbed],
+    components: [buildStartRow(startId, closeId)],
+  });
+
+  const startCollector = startMessage.createMessageComponentCollector({
+    time: ROOM_CLOSE_DELAY,
+  });
+
+  startCollector.on("collect", async (buttonInteraction) => {
+    if (buttonInteraction.user.id !== userId) {
+      return buttonInteraction.reply({
+        content: "This is not your Origin game room.",
+        flags: MessageFlags.Ephemeral,
+      });
+    }
+
+    if (buttonInteraction.customId === closeId) {
+      await buttonInteraction.update({
+        content: "Closing this private room now.",
+        embeds: [],
+        components: [],
+      });
+
+      deleteGameRoom(gameChannel, 1000);
+      return;
+    }
+
+    if (buttonInteraction.customId === startId) {
+      await buttonInteraction.update({
+        content: `Starting Origin Crash with bet: **${formatOC(bet)} OC**.`,
+        embeds: [],
+        components: [],
+      });
+
+      startCollector.stop("started");
+
+      await runCrashRound({
+        gameChannel,
+        interaction,
+        bet,
+      });
+    }
+  });
+
+  startCollector.on("end", async (_, reason) => {
+    if (reason !== "started") {
+      deleteGameRoom(gameChannel, 1000);
+    }
+  });
+}
+
 module.exports = {
   data: new SlashCommandBuilder()
     .setName("crash")
@@ -552,7 +646,7 @@ module.exports = {
       components: [buildGoToRoomRow(gameChannel.url)],
     });
 
-    await runCrashRound({
+    await sendStartPrompt({
       gameChannel,
       interaction,
       bet,
