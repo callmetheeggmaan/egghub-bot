@@ -14,7 +14,6 @@ const activeCrashGames = new Set();
 
 const MIN_BET = 10;
 const MAX_BET = 20000;
-
 const GAME_TICK_MS = 1000;
 const START_DELAY_MS = 1500;
 const MAX_GAME_TIME_MS = 30000;
@@ -224,19 +223,64 @@ module.exports = {
     let currentBet = originalBet;
     let message = null;
     let collector = null;
+    let gameInterval = null;
     let gameOver = false;
     let gameStarted = false;
     let startTime = null;
     let crashPoint = null;
-    let roundId = 0;
+    let editLocked = false;
+
+    function clearGameLoop() {
+      if (gameInterval) clearInterval(gameInterval);
+      gameInterval = null;
+    }
 
     function endActiveGame() {
+      clearGameLoop();
       activeCrashGames.delete(userId);
     }
 
+    async function safeEdit(payload) {
+      if (!message || editLocked || gameOver) return;
+
+      editLocked = true;
+
+      try {
+        await message.edit(payload);
+      } catch (error) {
+        if (error.code !== 10008) {
+          console.error("Crash edit error:", error);
+        }
+      } finally {
+        editLocked = false;
+      }
+    }
+
+    async function finishAsCrash(multiplierValue) {
+      if (gameOver) return;
+
+      gameOver = true;
+      gameStarted = false;
+      clearGameLoop();
+
+      const balance = await getUserBalance(userId);
+
+      await message.edit({
+        embeds: [
+          makeEmbed({
+            bet: currentBet,
+            multiplier: multiplierValue,
+            potentialWin: 0,
+            status: "crashed",
+            balance,
+          }),
+        ],
+        components: makeButtons(userId, "ended"),
+      }).catch(() => null);
+    }
+
     async function startRound() {
-      roundId += 1;
-      const thisRound = roundId;
+      clearGameLoop();
 
       gameOver = false;
       gameStarted = false;
@@ -311,10 +355,11 @@ module.exports = {
               });
             }
 
-            await buttonInteraction.deferUpdate();
-
             if (buttonInteraction.customId === `crash_done_${userId}`) {
+              await buttonInteraction.deferUpdate();
+
               if (collector) collector.stop("done");
+
               gameOver = true;
               gameStarted = false;
               endActiveGame();
@@ -327,24 +372,30 @@ module.exports = {
             }
 
             if (buttonInteraction.customId === `crash_again_${userId}`) {
+              await buttonInteraction.deferUpdate();
+
               if (!gameOver) return;
               await startRound();
               return;
             }
 
             if (buttonInteraction.customId !== `crash_cashout_${userId}`) return;
-            if (!gameStarted || gameOver) return;
+
+            if (!gameStarted || gameOver) {
+              return buttonInteraction.deferUpdate().catch(() => null);
+            }
+
+            gameOver = true;
+            gameStarted = false;
+            clearGameLoop();
 
             const elapsed = Date.now() - startTime;
             const cashMultiplier = getMultiplier(elapsed);
 
             if (cashMultiplier >= crashPoint) {
-              gameOver = true;
-              gameStarted = false;
-
               const balance = await getUserBalance(userId);
 
-              await message.edit({
+              return buttonInteraction.update({
                 embeds: [
                   makeEmbed({
                     bet: currentBet,
@@ -356,12 +407,7 @@ module.exports = {
                 ],
                 components: makeButtons(userId, "ended"),
               }).catch(() => null);
-
-              return;
             }
-
-            gameOver = true;
-            gameStarted = false;
 
             let jackpotWin = 0;
             let winnings = Math.floor(currentBet * cashMultiplier);
@@ -376,7 +422,7 @@ module.exports = {
 
             const balance = await addWinnings(userId, username, winnings);
 
-            await message.edit({
+            await buttonInteraction.update({
               embeds: [
                 makeEmbed({
                   bet: currentBet,
@@ -401,6 +447,13 @@ module.exports = {
             gameOver = true;
             gameStarted = false;
             endActiveGame();
+
+            if (!buttonInteraction.replied && !buttonInteraction.deferred) {
+              await buttonInteraction.reply({
+                content: "Crash action failed.",
+                ephemeral: true,
+              }).catch(() => null);
+            }
           }
         });
 
@@ -418,7 +471,7 @@ module.exports = {
 
       await wait(START_DELAY_MS);
 
-      if (gameOver || thisRound !== roundId) return;
+      if (gameOver) return;
 
       gameStarted = true;
       startTime = Date.now();
@@ -435,37 +488,21 @@ module.exports = {
         components: makeButtons(userId, "playing"),
       }).catch(() => null);
 
-      while (!gameOver && gameStarted && thisRound === roundId) {
-        await wait(GAME_TICK_MS);
-
-        if (gameOver || !gameStarted || thisRound !== roundId) return;
+      gameInterval = setInterval(async () => {
+        if (gameOver || !gameStarted) {
+          clearGameLoop();
+          return;
+        }
 
         const elapsed = Date.now() - startTime;
         const multiplier = getMultiplier(elapsed);
 
         if (elapsed >= MAX_GAME_TIME_MS || multiplier >= crashPoint) {
-          gameOver = true;
-          gameStarted = false;
-
-          const balance = await getUserBalance(userId);
-
-          await message.edit({
-            embeds: [
-              makeEmbed({
-                bet: currentBet,
-                multiplier: crashPoint,
-                potentialWin: 0,
-                status: "crashed",
-                balance,
-              }),
-            ],
-            components: makeButtons(userId, "ended"),
-          }).catch(() => null);
-
+          await finishAsCrash(crashPoint);
           return;
         }
 
-        await message.edit({
+        await safeEdit({
           embeds: [
             makeEmbed({
               bet: currentBet,
@@ -475,8 +512,8 @@ module.exports = {
             }),
           ],
           components: makeButtons(userId, "playing"),
-        }).catch(() => null);
-      }
+        });
+      }, GAME_TICK_MS);
     }
 
     try {
