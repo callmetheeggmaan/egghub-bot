@@ -13,10 +13,11 @@ const { addToJackpot, rollJackpotWin, payJackpot } = require("../utils/jackpot")
 const activeCrashGames = new Set();
 
 const MIN_BET = 10;
-const MAX_BET = 5000;
-const GAME_TICK_MS = 700;
+const MAX_BET = 20000;
+
+const GAME_TICK_MS = 1000;
 const START_DELAY_MS = 1500;
-const MAX_GAME_TIME_MS = 25000;
+const MAX_GAME_TIME_MS = 30000;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -25,18 +26,18 @@ function wait(ms) {
 function randomCrashPoint() {
   const roll = Math.random();
 
-  if (roll < 0.25) return Number((1.10 + Math.random() * 0.45).toFixed(2));
-  if (roll < 0.55) return Number((1.55 + Math.random() * 0.95).toFixed(2));
-  if (roll < 0.78) return Number((2.50 + Math.random() * 2.00).toFixed(2));
-  if (roll < 0.92) return Number((4.50 + Math.random() * 4.50).toFixed(2));
-  if (roll < 0.98) return Number((9.00 + Math.random() * 8.00).toFixed(2));
+  if (roll < 0.15) return Number((1.25 + Math.random() * 0.45).toFixed(2));
+  if (roll < 0.45) return Number((1.70 + Math.random() * 0.90).toFixed(2));
+  if (roll < 0.70) return Number((2.60 + Math.random() * 2.20).toFixed(2));
+  if (roll < 0.88) return Number((4.80 + Math.random() * 4.70).toFixed(2));
+  if (roll < 0.97) return Number((9.50 + Math.random() * 9.50).toFixed(2));
 
-  return Number((17.00 + Math.random() * 18.00).toFixed(2));
+  return Number((19.00 + Math.random() * 21.00).toFixed(2));
 }
 
 function getMultiplier(elapsedMs) {
   const seconds = elapsedMs / 1000;
-  return Number((1 + seconds * 0.22 + Math.pow(seconds, 1.35) * 0.045).toFixed(2));
+  return Number((1 + seconds * 0.16 + Math.pow(seconds, 1.25) * 0.035).toFixed(2));
 }
 
 function makeBar(multiplier, crashPoint, status) {
@@ -46,10 +47,6 @@ function makeBar(multiplier, crashPoint, status) {
   const empty = blocks - filled;
 
   if (status === "crashed") return "■".repeat(filled) + "□".repeat(empty);
-  if (status === "cashed") return "◆".repeat(filled) + "◇".repeat(empty);
-  if (multiplier >= 5) return "◆".repeat(filled) + "◇".repeat(empty);
-  if (multiplier >= 2.5) return "◆".repeat(filled) + "◇".repeat(empty);
-
   return "◆".repeat(filled) + "◇".repeat(empty);
 }
 
@@ -101,16 +98,9 @@ function makeEmbed({
     resultText = "Prepare your position.";
   }
 
-  if (status === "playing") {
-    if (multiplier >= 2.5) headline = `**${multiplier.toFixed(2)}x**`;
-    if (multiplier >= 5) headline = `**${multiplier.toFixed(2)}x**`;
-    if (multiplier >= 10) headline = `**${multiplier.toFixed(2)}x**`;
-  }
-
   if (status === "cashed") {
     color = 0x22c55e;
     title = jackpotWin > 0 ? "Origin Jackpot Cashout" : "Cashed Out";
-    headline = `**${multiplier.toFixed(2)}x**`;
     resultText = jackpotWin > 0
       ? `You won **${formatCurrency(winnings)}**, including a jackpot of **${formatCurrency(jackpotWin)}**.`
       : `You won **${formatCurrency(winnings)}**.`;
@@ -119,7 +109,6 @@ function makeEmbed({
   if (status === "crashed") {
     color = 0xef4444;
     title = "Crashed";
-    headline = `**${multiplier.toFixed(2)}x**`;
     resultText = `You lost **${formatCurrency(bet)}**.`;
   }
 
@@ -235,24 +224,19 @@ module.exports = {
     let currentBet = originalBet;
     let message = null;
     let collector = null;
-    let gameInterval = null;
     let gameOver = false;
     let gameStarted = false;
     let startTime = null;
     let crashPoint = null;
-
-    function clearGameTimers() {
-      if (gameInterval) clearInterval(gameInterval);
-      gameInterval = null;
-    }
+    let roundId = 0;
 
     function endActiveGame() {
-      clearGameTimers();
       activeCrashGames.delete(userId);
     }
 
     async function startRound() {
-      clearGameTimers();
+      roundId += 1;
+      const thisRound = roundId;
 
       gameOver = false;
       gameStarted = false;
@@ -331,6 +315,8 @@ module.exports = {
 
             if (buttonInteraction.customId === `crash_done_${userId}`) {
               if (collector) collector.stop("done");
+              gameOver = true;
+              gameStarted = false;
               endActiveGame();
 
               await message.edit({
@@ -347,7 +333,6 @@ module.exports = {
             }
 
             if (buttonInteraction.customId !== `crash_cashout_${userId}`) return;
-
             if (!gameStarted || gameOver) return;
 
             const elapsed = Date.now() - startTime;
@@ -356,7 +341,6 @@ module.exports = {
             if (cashMultiplier >= crashPoint) {
               gameOver = true;
               gameStarted = false;
-              clearGameTimers();
 
               const balance = await getUserBalance(userId);
 
@@ -378,7 +362,6 @@ module.exports = {
 
             gameOver = true;
             gameStarted = false;
-            clearGameTimers();
 
             let jackpotWin = 0;
             let winnings = Math.floor(currentBet * cashMultiplier);
@@ -415,11 +398,15 @@ module.exports = {
             }
           } catch (err) {
             console.error("Crash button error:", err);
+            gameOver = true;
+            gameStarted = false;
             endActiveGame();
           }
         });
 
         collector.on("end", () => {
+          gameOver = true;
+          gameStarted = false;
           endActiveGame();
         });
       } else {
@@ -431,7 +418,7 @@ module.exports = {
 
       await wait(START_DELAY_MS);
 
-      if (gameOver) return;
+      if (gameOver || thisRound !== roundId) return;
 
       gameStarted = true;
       startTime = Date.now();
@@ -448,55 +435,48 @@ module.exports = {
         components: makeButtons(userId, "playing"),
       }).catch(() => null);
 
-      gameInterval = setInterval(async () => {
-        try {
-          if (gameOver || !gameStarted) {
-            clearGameTimers();
-            return;
-          }
+      while (!gameOver && gameStarted && thisRound === roundId) {
+        await wait(GAME_TICK_MS);
 
-          const elapsed = Date.now() - startTime;
-          const multiplier = getMultiplier(elapsed);
+        if (gameOver || !gameStarted || thisRound !== roundId) return;
 
-          if (elapsed >= MAX_GAME_TIME_MS || multiplier >= crashPoint) {
-            gameOver = true;
-            gameStarted = false;
-            clearGameTimers();
+        const elapsed = Date.now() - startTime;
+        const multiplier = getMultiplier(elapsed);
 
-            const balance = await getUserBalance(userId);
+        if (elapsed >= MAX_GAME_TIME_MS || multiplier >= crashPoint) {
+          gameOver = true;
+          gameStarted = false;
 
-            await message.edit({
-              embeds: [
-                makeEmbed({
-                  bet: currentBet,
-                  multiplier: crashPoint,
-                  potentialWin: 0,
-                  status: "crashed",
-                  balance,
-                }),
-              ],
-              components: makeButtons(userId, "ended"),
-            }).catch(() => null);
-
-            return;
-          }
+          const balance = await getUserBalance(userId);
 
           await message.edit({
             embeds: [
               makeEmbed({
                 bet: currentBet,
-                multiplier,
-                potentialWin: Math.floor(currentBet * multiplier),
-                status: "playing",
+                multiplier: crashPoint,
+                potentialWin: 0,
+                status: "crashed",
+                balance,
               }),
             ],
-            components: makeButtons(userId, "playing"),
+            components: makeButtons(userId, "ended"),
           }).catch(() => null);
-        } catch (err) {
-          console.error("Crash game loop error:", err);
-          endActiveGame();
+
+          return;
         }
-      }, GAME_TICK_MS);
+
+        await message.edit({
+          embeds: [
+            makeEmbed({
+              bet: currentBet,
+              multiplier,
+              potentialWin: Math.floor(currentBet * multiplier),
+              status: "playing",
+            }),
+          ],
+          components: makeButtons(userId, "playing"),
+        }).catch(() => null);
+      }
     }
 
     try {
