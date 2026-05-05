@@ -341,14 +341,16 @@ module.exports = {
 
     const userId = interaction.user.id;
 
-    const roomResult = await createGameRoom(interaction, "farm");
+const roomResult = await createGameRoom(interaction, "farm", {
+  publicViewOnly: true,
+});
 
-    if (roomResult.alreadyExists) {
-      return interaction.editReply({
-        content: `You already have an active Origin generator room: ${roomResult.channel}`,
-        components: [buildGoToRoomRow(roomResult.channel.url)],
-      });
-    }
+if (roomResult.alreadyExists) {
+  await interaction.editReply({
+    content: `Your Origin Generator Room is already active: ${roomResult.channel}`,
+    components: [buildGoToRoomRow(roomResult.channel.url)],
+  });
+}
 
     const channel = roomResult.channel;
 
