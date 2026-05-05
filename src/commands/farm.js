@@ -75,6 +75,12 @@ async function ensureTables() {
     ALTER TABLE generators
     ALTER COLUMN egg_farm SET DEFAULT 1
   `);
+
+  await pool.query(`
+    ALTER TABLE generators
+    ALTER COLUMN stored_oc TYPE DOUBLE PRECISION
+    USING stored_oc::DOUBLE PRECISION
+  `);
 }
 
 async function ensureUser(discordId) {
@@ -104,7 +110,7 @@ async function addCoins(discordId, amount) {
     `UPDATE users
      SET eggs = eggs + $2
      WHERE discord_id = $1`,
-    [discordId, amount]
+    [discordId, Math.floor(amount)]
   );
 }
 
@@ -115,7 +121,7 @@ async function removeCoins(discordId, amount) {
     `UPDATE users
      SET eggs = eggs - $2
      WHERE discord_id = $1`,
-    [discordId, amount]
+    [discordId, Math.floor(amount)]
   );
 }
 
