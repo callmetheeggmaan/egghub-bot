@@ -16,7 +16,7 @@ const pool = new Pool({
 });
 
 const TICK_MS = 3000;
-const ROOM_TIME = 180000;
+const ROOM_TIME = 24 * 60 * 60 * 1000;
 
 const GENERATORS = {
   egg_farm: {
@@ -530,16 +530,22 @@ module.exports = {
         return;
       }
     });
+collector.on("end", async (_, reason) => {
+  running = false;
+  clearInterval(interval);
 
-    collector.on("end", async (_, reason) => {
-      running = false;
-      clearInterval(interval);
+  await saveFarm(userId, farm);
 
-      await saveFarm(userId, farm);
+  if (reason === "closed") {
+    return;
+  }
 
-      if (reason !== "closed") {
-        deleteGameRoom(channel, 1000);
-      }
-    });
+  await channel.send({
+    content:
+      `${interaction.user}, your generators are still running in the background. ` +
+      `Use **/farm** again to reopen the live control panel and collect OC.`,
+  });
+});
+
   },
 };
