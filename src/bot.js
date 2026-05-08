@@ -10,6 +10,7 @@ const { startRandomDrops } = require("./utils/randomDrops");
 const { startOriginPanel } = require("./utils/originPanel");
 const { getEggMultiplier } = require("./utils/boosts");
 const { formatCurrency } = require("./config/brand");
+const { handleFarmButton } = require("./systems/farmSystem");
 
 const {
   trackDropActivity,
@@ -22,6 +23,7 @@ const {
   Collection,
   Events,
   Partials,
+  MessageFlags,
 } = require("discord.js");
 
 const client = new Client({
@@ -166,113 +168,124 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
 
 // Interaction handler
 client.on(Events.InteractionCreate, async (interaction) => {
-  // Buttons
-  if (interaction.isButton()) {
-    const handled = await handleDropClaim(interaction);
-    if (handled) return;
+  try {
+    // Buttons
+    if (interaction.isButton()) {
+      const handledFarmButton = await handleFarmButton(interaction);
+      if (handledFarmButton) return;
 
-    if (interaction.customId === "origin_panel_rules") {
-      return interaction.reply({
-        content:
-          "**Origin Rules**\n\n" +
-          "1. Respect all members.\n" +
-          "2. No abuse, spam, harassment, or targeted behaviour.\n" +
-          "3. Do not exploit games, commands, rewards, or bot systems.\n" +
-          "4. Keep all gameplay fair.\n" +
-          "5. Staff decisions are final.",
-        ephemeral: true
-      });
-    }
+      const handledDropButton = await handleDropClaim(interaction);
+      if (handledDropButton) return;
 
-    if (interaction.customId === "origin_panel_shop") {
-      return interaction.reply({
-        content: "Use `/shop` to access the Origin Vault.",
-        ephemeral: true
-      });
-    }
-
-    if (interaction.customId === "origin_panel_open") {
-      return interaction.reply({
-        content: "Use `/open` to open your vaults.",
-        ephemeral: true
-      });
-    }
-
-    if (interaction.customId === "origin_panel_balance") {
-      return interaction.reply({
-        content: "Use `/balance` to check your Origin Coins.",
-        ephemeral: true
-      });
-    }
-
-    if (interaction.customId === "origin_panel_leaderboard") {
-      return interaction.reply({
-        content: "The leaderboard updates live in the leaderboard channel.",
-        ephemeral: true
-      });
-    }
-  }
-
-  // Select menus
-  if (interaction.isStringSelectMenu()) {
-    if (interaction.customId === "role_select") {
-      const rolesMap = {
-        streamer: process.env.ROLE_STREAMER,
-        content_creator: process.env.ROLE_CONTENT_CREATOR,
-        artist: process.env.ROLE_ARTIST,
-        viewer: process.env.ROLE_VIEWER,
-      };
-
-      const member = await interaction.guild.members.fetch(interaction.user.id);
-
-      for (const key in rolesMap) {
-        const roleId = rolesMap[key];
-        if (!roleId) continue;
-
-        const role = interaction.guild.roles.cache.get(roleId);
-        if (!role) continue;
-
-        if (interaction.values.includes(key)) {
-          await member.roles.add(role).catch(() => null);
-        } else {
-          await member.roles.remove(role).catch(() => null);
-        }
+      if (interaction.customId === "origin_panel_rules") {
+        return interaction.reply({
+          content:
+            "**Origin Rules**\n\n" +
+            "1. Respect all members.\n" +
+            "2. No abuse, spam, harassment, or targeted behaviour.\n" +
+            "3. Do not exploit games, commands, rewards, or bot systems.\n" +
+            "4. Keep all gameplay fair.\n" +
+            "5. Staff decisions are final.",
+          flags: MessageFlags.Ephemeral,
+        });
       }
 
-      return interaction.reply({
-        content: "Roles updated.",
-        ephemeral: true,
-      });
+      if (interaction.customId === "origin_panel_shop") {
+        return interaction.reply({
+          content: "Use `/shop` to access the Origin Vault.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (interaction.customId === "origin_panel_open") {
+        return interaction.reply({
+          content: "Use `/open` to open your vaults.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (interaction.customId === "origin_panel_balance") {
+        return interaction.reply({
+          content: "Use `/balance` to check your Origin Coins.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (interaction.customId === "origin_panel_leaderboard") {
+        return interaction.reply({
+          content: "The leaderboard updates live in the leaderboard channel.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      return;
     }
 
-    if (interaction.customId === "shop_select") {
-      const selected = interaction.values[0];
-      return buyItem(interaction, selected);
+    // Select menus
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === "role_select") {
+        const rolesMap = {
+          streamer: process.env.ROLE_STREAMER,
+          content_creator: process.env.ROLE_CONTENT_CREATOR,
+          artist: process.env.ROLE_ARTIST,
+          viewer: process.env.ROLE_VIEWER,
+        };
+
+        const member = await interaction.guild.members.fetch(interaction.user.id);
+
+        for (const key in rolesMap) {
+          const roleId = rolesMap[key];
+          if (!roleId) continue;
+
+          const role = interaction.guild.roles.cache.get(roleId);
+          if (!role) continue;
+
+          if (interaction.values.includes(key)) {
+            await member.roles.add(role).catch(() => null);
+          } else {
+            await member.roles.remove(role).catch(() => null);
+          }
+        }
+
+        return interaction.reply({
+          content: "Roles updated.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+
+      if (interaction.customId === "shop_select") {
+        const selected = interaction.values[0];
+        return buyItem(interaction, selected);
+      }
+
+      return;
     }
-  }
 
-  // Slash commands
-  if (!interaction.isChatInputCommand()) return;
+    // Slash commands
+    if (!interaction.isChatInputCommand()) return;
 
-  const command = client.commands.get(interaction.commandName);
+    const command = client.commands.get(interaction.commandName);
 
-  if (!command) return;
+    if (!command) return;
 
-  try {
     await command.execute(interaction);
   } catch (error) {
-    console.error("Command error:", error);
+    console.error("Interaction error:", error);
 
-    if (interaction.replied || interaction.deferred) {
-      await interaction.followUp({
-        content: "Error executing command.",
-        ephemeral: true,
-      });
-    } else {
-      await interaction.reply({
-        content: "Error executing command.",
-        ephemeral: true,
-      });
+    try {
+      if (interaction.replied || interaction.deferred) {
+        await interaction.followUp({
+          content: "Error executing command.",
+          flags: MessageFlags.Ephemeral,
+        });
+      } else {
+        await interaction.reply({
+          content: "Error executing command.",
+          flags: MessageFlags.Ephemeral,
+        });
+      }
+    } catch (replyError) {
+      console.error("Interaction error reply failed:", replyError);
     }
   }
 });
