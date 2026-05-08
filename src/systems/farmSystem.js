@@ -13,6 +13,11 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
 });
 
+const visualPanels = new Map();
+
+const VISUAL_TICK_MS = 10000;
+const MAX_ACTIVE_PANEL_AGE = 1000 * 60 * 60 * 6;
+
 const GENERATORS = {
   egg_farm: {
     label: "Egg Farm",
@@ -185,7 +190,30 @@ function applyOfflineEarnings(farm) {
   return { farm, earned };
 }
 
-function buildFarmEmbed(user, farm, eventText = null) {
+function getVisualStoredOC(farm) {
+  const lastUpdate = farm.last_update ? new Date(farm.last_update).getTime() : Date.now();
+  const now = Date.now();
+  const seconds = Math.max(0, Math.floor((now - lastUpdate) / 1000));
+  const perHour = getTotalPerHour(farm);
+  return Number(farm.stored_oc || 0) + (perHour / 3600) * seconds;
+}
+
+function randomMood() {
+  const moods = [
+    "Origin Coins drip through the vault pipes like liquid gold.",
+    "The generator room hums with black-gold energy.",
+    "Golden sparks flicker around the machines.",
+    "The vault engines pulse beneath the floor.",
+    "The Egg Farms glow under the Origin moonlight.",
+    "A black-gold surge runs through the generator core.",
+    "The machines breathe out warm golden mist.",
+    "The vault printer stamps fresh OC into the chamber.",
+  ];
+
+  return moods[Math.floor(Math.random() * moods.length)];
+}
+
+function buildFarmEmbed(user, farm, eventText = null, visualStoredOverride = null) {
   const eggCount = Number(farm.egg_farm || 0);
   const minerCount = Number(farm.crypto_miner || 0);
   const printerCount = Number(farm.vault_printer || 0);
@@ -195,22 +223,18 @@ function buildFarmEmbed(user, farm, eventText = null) {
   const minerCost = getUpgradeCost("crypto_miner", minerCount);
   const printerCost = getUpgradeCost("vault_printer", printerCount);
 
-  const moods = [
-    "Origin Coins drip through the vault pipes like liquid gold.",
-    "The generator room hums with black-gold energy.",
-    "Golden sparks flicker around the machines.",
-    "The vault engines pulse beneath the floor.",
-    "The Egg Farms glow under the Origin moonlight.",
-  ];
+  const stored = visualStoredOverride !== null
+    ? visualStoredOverride
+    : Number(farm.stored_oc || 0);
 
-  const mood = eventText || moods[Math.floor(Math.random() * moods.length)];
+  const mood = eventText || randomMood();
 
   return new EmbedBuilder()
     .setTitle("ORIGIN GENERATOR ROOM")
     .setColor(0xd4af37)
     .setDescription(
       `**${mood}**\n\n` +
-      `Stored OC: **${formatOC(Math.floor(farm.stored_oc))} OC**\n` +
+      `Stored OC: **${formatOC(Math.floor(stored))} OC**\n` +
       `Production: **${formatOC(perHour)} OC/hour**\n\n` +
       `${GENERATORS.egg_farm.emoji} Egg Farms: **${eggCount}**\n` +
       `${GENERATORS.crypto_miner.emoji} Crypto Miners: **${minerCount}**\n` +
@@ -263,6 +287,16 @@ function upgradeButtons() {
   );
 }
 
+function registerFarmPanel(message, userId, username) {
+  visualPanels.set(message.id, {
+    channelId: message.channel.id,
+    messageId: message.id,
+    userId,
+    username,
+    createdAt: Date.now(),
+  });
+}
+
 async function refreshFarmPanel(interaction, mode = "main", eventText = null) {
   const userId = interaction.user.id;
 
@@ -283,6 +317,8 @@ async function refreshFarmPanel(interaction, mode = "main", eventText = null) {
     embeds: [buildFarmEmbed(interaction.user, farm, text)],
     components: [mode === "upgrade" ? upgradeButtons() : mainButtons()],
   });
+
+  registerFarmPanel(interaction.message, userId, interaction.user.username);
 }
 
 async function collectFarm(interaction) {
@@ -319,6 +355,8 @@ async function collectFarm(interaction) {
     ],
     components: [mainButtons()],
   });
+
+  registerFarmPanel(interaction.message, userId, interaction.user.username);
 }
 
 async function buyGenerator(interaction, type) {
@@ -356,6 +394,8 @@ async function buyGenerator(interaction, type) {
     ],
     components: [upgradeButtons()],
   });
+
+  registerFarmPanel(interaction.message, userId, interaction.user.username);
 }
 
 async function handleFarmButton(interaction) {
@@ -434,6 +474,51 @@ async function handleFarmButton(interaction) {
   }
 }
 
+function startFarmVisualTicker(client) {
+  setInterval(async () => {
+    for (const [messageId, panel] of visualPanels.entries()) {
+      try {
+        if (Date.now() - panel.createdAt > MAX_ACTIVE_PANEL_AGE) {
+          visualPanels.delete(messageId);
+          continue;
+        }
+
+        const channel = await client.channels.fetch(panel.channelId).catch(() => null);
+        if (!channel) {
+          visualPanels.delete(messageId);
+          continue;
+        }
+
+        const message = await channel.messages.fetch(panel.messageId).catch(() => null);
+        if (!message) {
+          visualPanels.delete(messageId);
+          continue;
+        }
+
+        const farm = await getFarm(panel.userId);
+        const visualStored = getVisualStoredOC(farm);
+
+        const fakeUser = {
+          id: panel.userId,
+          username: panel.username || "Origin User",
+          toString: () => `<@${panel.userId}>`,
+        };
+
+        await message.edit({
+          content: `<@${panel.userId}>, your generators are active.`,
+          embeds: [buildFarmEmbed(fakeUser, farm, randomMood(), visualStored)],
+          components: [mainButtons()],
+        });
+      } catch (error) {
+        console.error("Farm visual ticker error:", error);
+        visualPanels.delete(messageId);
+      }
+    }
+  }, VISUAL_TICK_MS);
+
+  console.log("Origin farm visual ticker started.");
+}
+
 module.exports = {
   getFarm,
   applyOfflineEarnings,
@@ -441,4 +526,6 @@ module.exports = {
   buildFarmEmbed,
   mainButtons,
   handleFarmButton,
+  registerFarmPanel,
+  startFarmVisualTicker,
 };

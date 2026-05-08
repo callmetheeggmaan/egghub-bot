@@ -10,7 +10,10 @@ const { startRandomDrops } = require("./utils/randomDrops");
 const { startOriginPanel } = require("./utils/originPanel");
 const { getEggMultiplier } = require("./utils/boosts");
 const { formatCurrency } = require("./config/brand");
-const { handleFarmButton } = require("./systems/farmSystem");
+const {
+  handleFarmButton,
+  startFarmVisualTicker,
+} = require("./systems/farmSystem");
 
 const {
   trackDropActivity,
@@ -67,6 +70,7 @@ client.once(Events.ClientReady, () => {
   startLiveLeaderboard(client);
   startRandomDrops(client);
   startOriginPanel(client);
+  startFarmVisualTicker(client);
 });
 
 // Welcome system

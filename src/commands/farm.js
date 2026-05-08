@@ -14,6 +14,7 @@ const {
   saveFarm,
   buildFarmEmbed,
   mainButtons,
+  registerFarmPanel,
 } = require("../systems/farmSystem");
 
 function buildGoToRoomRow(channelUrl) {
@@ -49,7 +50,6 @@ module.exports = {
     });
 
     let farm = await getFarm(interaction.user.id);
-
     const offline = applyOfflineEarnings(farm);
     farm = offline.farm;
 
@@ -60,10 +60,12 @@ module.exports = {
         ? `Your generators created **${Math.floor(offline.earned).toLocaleString("en-GB")} OC** while running.`
         : "Your Origin Generator Room is humming with black-gold energy.";
 
-    await channel.send({
+    const panelMessage = await channel.send({
       content: `${interaction.user}, your generators are active.`,
       embeds: [buildFarmEmbed(interaction.user, farm, eventText)],
       components: [mainButtons()],
     });
+
+    registerFarmPanel(panelMessage, interaction.user.id, interaction.user.username);
   },
 };
