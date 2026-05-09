@@ -10,10 +10,16 @@ const { startRandomDrops } = require("./utils/randomDrops");
 const { startOriginPanel } = require("./utils/originPanel");
 const { getEggMultiplier } = require("./utils/boosts");
 const { formatCurrency } = require("./config/brand");
+
 const {
   handleFarmButton,
   startFarmVisualTicker,
 } = require("./systems/farmSystem");
+
+const {
+  startBumpSystem,
+  handleBumpMessage,
+} = require("./utils/bumpSystem");
 
 const {
   trackDropActivity,
@@ -71,6 +77,7 @@ client.once(Events.ClientReady, () => {
   startRandomDrops(client);
   startOriginPanel(client);
   startFarmVisualTicker(client);
+  startBumpSystem(client);
 });
 
 // Welcome system
@@ -298,7 +305,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
 const messageCooldowns = new Map();
 
 client.on(Events.MessageCreate, async (message) => {
-  if (message.author.bot) return;
+  if (message.author.bot) {
+    await handleBumpMessage(message, client);
+    return;
+  }
+
   if (!message.guild) return;
 
   trackDropActivity(message);
